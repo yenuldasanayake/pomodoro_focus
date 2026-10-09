@@ -1,0 +1,16 @@
+[package]
+name = "pomodoro_focus"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+axum = "0.8.9"
+chrono = "0.4.45"
+eframe = "0.36.2"
+egui_plot = "0.37.0"
+getrandom = "0.3.4"
+local-ip-address = "0.6.13"
+rodio = "0.22.2"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+tokio = { version = "1.53.2", features = ["full"] }
