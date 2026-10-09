@@ -15,8 +15,7 @@ cargo run --release
 
 The app starts fullscreen. Pressing **Esc** toggles fullscreen only when
 “Allow Esc to toggle fullscreen” is enabled; it is disabled by default. You
-can change this option in the desktop settings or from the phone page, then
-save the phone settings.
+can change this option from the phone page, then save the phone settings.
 
 ## Phone remote
 
@@ -31,27 +30,31 @@ temporarily lock PIN-protected actions.
 The phone page's **Allow Esc to toggle fullscreen** checkbox is included in
 the timer settings and takes effect after **Save settings**.
 
-The phone and desktop have a **Block sites** switch for Instagram, YouTube,
-TikTok, and Facebook. The switch writes a clearly marked section in the Windows
-hosts file, flushes the DNS cache, and removes only that managed section when
-you turn blocking off. **Run Pomodoro Focus as Administrator** to use this
-system-wide block. Without elevation, the switch still enables the browser
-extension, and the app clearly reports that the system-wide hosts block could
-not be applied.
+The phone page has a **Block sites** switch for Instagram, YouTube, TikTok, and
+Facebook. The switch writes a clearly marked section in the Windows hosts file,
+flushes the DNS cache, and removes only that managed section when you turn
+blocking off. **Run Pomodoro Focus as Administrator** to use this system-wide
+block. Without elevation, the switch still enables the browser extension, and
+the app clearly reports that the system-wide hosts block could not be applied.
 
-### Browser extension (Chrome and Edge)
+### Browser extension (Chrome, Edge, and Firefox)
 
-The optional Manifest V3 extension applies the same switch to browser
-navigation, including subdomains. To install it for local use:
+The optional extensions apply the same switch to browser navigation, including
+subdomains. To install the Chrome or Edge extension for local use:
 
 1. Run Pomodoro Focus and open `chrome://extensions` (or `edge://extensions`).
 2. Turn on **Developer mode** and select **Load unpacked**.
 3. Choose the repository's `extension` folder.
 
-The extension follows the desktop app's switch and syncs about every 30
-seconds while the browser is running. Keep the desktop app running for the
-extension to receive switch updates. Browser blocking remains useful when
-system-wide hosts-file editing is unavailable.
+For Firefox, run Pomodoro Focus and open `about:debugging#/runtime/this-firefox`.
+Select **Load Temporary Add-on…** and choose `extension/firefox/manifest.json`.
+Firefox temporary add-ons are removed when Firefox closes.
+
+The extensions follow the phone page's switch and sync periodically while the
+browser is running (about 30 seconds in Chrome and Edge, and once a minute in
+Firefox). Keep the desktop app running for the extension to receive switch
+updates. Browser blocking remains useful when system-wide hosts-file editing
+is unavailable.
 
 ## Data files
 

@@ -64,3 +64,10 @@ chrome.alarms.onAlarm.addListener(alarm => {
     void syncRules();
   }
 });
+
+chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+  if (message.type === "sync") {
+    void syncRules().then(() => sendResponse({ ok: true }));
+    return true;
+  }
+});

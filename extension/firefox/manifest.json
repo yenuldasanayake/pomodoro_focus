@@ -1,0 +1,30 @@
+{
+  "manifest_version": 3,
+  "name": "Pomodoro Focus Site Blocker",
+  "version": "1.0.1",
+  "description": "Blocks distracting sites while the Pomodoro Focus app has site blocking enabled.",
+  "permissions": [
+    "alarms",
+    "declarativeNetRequest",
+    "storage"
+  ],
+  "host_permissions": [
+    "http://127.0.0.1/*"
+  ],
+  "background": {
+    "scripts": ["background.js"]
+  },
+  "action": {
+    "default_title": "Pomodoro Focus site blocking",
+    "default_popup": "popup.html"
+  },
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "pomodoro-focus-site-blocker@pomodoro-focus.local",
+      "strict_min_version": "128.0",
+      "data_collection_permissions": {
+        "required": ["none"]
+      }
+    }
+  }
+}

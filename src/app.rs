@@ -268,32 +268,9 @@ impl PomodoroApp {
                             );
                         });
                     });
-                    ui.vertical(|ui| {
-                        if ui.button("Copy URL").clicked() {
-                            ui.ctx().copy_text(state.local_url.clone());
-                        }
-                        if action_button(
-                            ui,
-                            if state.sites_blocked {
-                                "Unblock sites"
-                            } else {
-                                "Block sites"
-                            },
-                            if state.sites_blocked {
-                                Color32::from_rgb(69, 71, 90)
-                            } else {
-                                Color32::from_rgb(235, 118, 128)
-                            },
-                            theme::TEXT,
-                            142.0,
-                        )
-                        .clicked()
-                            && let Err(error) =
-                                state.set_sites_blocked(!state.sites_blocked)
-                        {
-                            state.error_message = Some(error);
-                        }
-                    });
+                    if ui.button("Copy URL").clicked() {
+                        ui.ctx().copy_text(state.local_url.clone());
+                    }
                 });
                 ui.label(
                     egui::RichText::new(
@@ -308,7 +285,7 @@ impl PomodoroApp {
                     } else if state.sites_blocked {
                         "Browser extension blocking is on; run this app as Administrator to block across Windows."
                     } else {
-                        "Block Instagram, YouTube, TikTok, and Facebook during focus time."
+                        "Manage website blocking from the phone page."
                     })
                     .size(12.0)
                     .color(theme::MUTED),
@@ -348,12 +325,6 @@ impl PomodoroApp {
                 &mut settings.sessions_before_long_break,
                 1..=12,
             );
-            changed |= ui
-                .checkbox(
-                    &mut settings.escape_exits_fullscreen,
-                    "Esc toggles fullscreen",
-                )
-                .changed();
         });
         if changed {
             if let Err(error) = state.update_settings(settings) {

@@ -12,4 +12,9 @@ async function showStatus() {
     : "Site blocking is off.";
 }
 
-void showStatus();
+chrome.runtime.sendMessage({ type: "sync" }, () => {
+  if (chrome.runtime.lastError) {
+    console.error("Could not sync with Pomodoro Focus:", chrome.runtime.lastError.message);
+  }
+  void showStatus();
+});
