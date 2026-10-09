@@ -1,5 +1,5 @@
 use crate::{
-    audio, site_blocker,
+    alt_tab, audio, site_blocker,
     storage::{BlockingSettings, History, Notes, Settings, Storage, StudyNote},
     timer::{Mode, Timer},
 };
@@ -31,6 +31,8 @@ pub struct AppState {
     pub local_url: String,
     pub sites_blocked: bool,
     pub hosts_block_active: bool,
+    pub alt_tab_block_active: bool,
+    pub alt_tab_error: Option<String>,
     pub server_error: Option<String>,
     pub pending_note_duration: Option<u64>,
     pub error_message: Option<String>,
@@ -48,6 +50,14 @@ impl AppState {
         let notes = load_with_warning(storage.load_notes(), "notes");
         let blocking = load_with_warning(storage.load_blocking_settings(), "blocking");
         let timer = Timer::new(&settings);
+        let (alt_tab_block_active, alt_tab_error) = if settings.block_alt_tab {
+            match alt_tab::set_blocked(true) {
+                Ok(()) => (true, None),
+                Err(error) => (false, Some(format!("Could not block Alt+Tab: {error}"))),
+            }
+        } else {
+            (false, None)
+        };
         let mut block_error = None;
         let hosts_block_active = match site_blocker::set_blocked(blocking.sites_blocked) {
             Ok(()) => blocking.sites_blocked,
@@ -67,6 +77,8 @@ impl AppState {
             local_url,
             sites_blocked: blocking.sites_blocked,
             hosts_block_active,
+            alt_tab_block_active,
+            alt_tab_error,
             server_error: None,
             pending_note_duration: None,
             error_message: block_error,
@@ -113,11 +125,50 @@ impl AppState {
     pub fn update_settings(&mut self, mut settings: Settings) -> Result<(), String> {
         self.tick();
         settings.sanitize();
+        settings.block_alt_tab = self.settings.block_alt_tab;
         self.storage
             .save_settings(&settings)
             .map_err(|error| format!("Could not save settings: {error}"))?;
         self.settings = settings;
         self.timer.set_settings(&self.settings);
+        self.ctx.request_repaint();
+        Ok(())
+    }
+
+    pub fn set_alt_tab_blocked(&mut self, blocked: bool) -> Result<(), String> {
+        if self.alt_tab_block_active == blocked && self.settings.block_alt_tab == blocked {
+            return Ok(());
+        }
+        let previous_active = self.alt_tab_block_active;
+        if let Err(error) = alt_tab::set_blocked(blocked) {
+            let message = format!("Could not update Alt+Tab blocking: {error}");
+            self.alt_tab_error = Some(message.clone());
+            self.ctx.request_repaint();
+            return Err(message);
+        }
+
+        let mut settings = self.settings.clone();
+        settings.block_alt_tab = blocked;
+        if let Err(error) = self.storage.save_settings(&settings) {
+            if previous_active != blocked
+                && let Err(rollback_error) = alt_tab::set_blocked(previous_active)
+            {
+                let message = format!(
+                    "Could not save Alt+Tab setting: {error}; restoring the previous keyboard state also failed: {rollback_error}"
+                );
+                self.alt_tab_error = Some(message.clone());
+                self.ctx.request_repaint();
+                return Err(message);
+            }
+            let message = format!("Could not save Alt+Tab setting: {error}");
+            self.alt_tab_error = Some(message.clone());
+            self.ctx.request_repaint();
+            return Err(message);
+        }
+
+        self.settings = settings;
+        self.alt_tab_block_active = blocked;
+        self.alt_tab_error = None;
         self.ctx.request_repaint();
         Ok(())
     }
@@ -258,6 +309,7 @@ pub fn start_server(state: SharedState) {
             .route("/command", post(command))
             .route("/settings", post(update_settings))
             .route("/blocking", post(update_blocking))
+            .route("/alt-tab", post(update_alt_tab))
             .with_state(state.clone());
         match listener.local_addr() {
             Ok(address) => eprintln!("Phone remote listening on {address}"),
@@ -297,6 +349,8 @@ struct StatusResponse {
     escape_exits_fullscreen: bool,
     sites_blocked: bool,
     hosts_block_active: bool,
+    alt_tab_blocked: bool,
+    alt_tab_error: Option<String>,
 }
 
 async fn status(State(shared): State<SharedState>) -> Result<Json<StatusResponse>, ApiError> {
@@ -316,6 +370,8 @@ async fn status(State(shared): State<SharedState>) -> Result<Json<StatusResponse
         escape_exits_fullscreen: state.settings.escape_exits_fullscreen,
         sites_blocked: state.sites_blocked,
         hosts_block_active: state.hosts_block_active,
+        alt_tab_blocked: state.alt_tab_block_active,
+        alt_tab_error: state.alt_tab_error.clone(),
     }))
 }
 
@@ -366,9 +422,33 @@ async fn update_settings(
         long_break_minutes: request.long_break_minutes,
         sessions_before_long_break: request.sessions_before_long_break,
         escape_exits_fullscreen: request.escape_exits_fullscreen,
+        block_alt_tab: state.settings.block_alt_tab,
     };
     state
         .update_settings(settings)
+        .map_err(ApiError::internal)?;
+    Ok(Json(MessageResponse {
+        ok: true,
+        warning: None,
+    }))
+}
+
+#[derive(Deserialize)]
+struct AltTabRequest {
+    token: String,
+    blocked: bool,
+}
+
+async fn update_alt_tab(
+    State(shared): State<SharedState>,
+    Json(request): Json<AltTabRequest>,
+) -> Result<Json<MessageResponse>, ApiError> {
+    let mut state = shared
+        .lock()
+        .map_err(|_| ApiError::internal("App state is unavailable"))?;
+    verify_token(&mut state, &request.token)?;
+    state
+        .set_alt_tab_blocked(request.blocked)
         .map_err(ApiError::internal)?;
     Ok(Json(MessageResponse {
         ok: true,
@@ -485,6 +565,7 @@ label{display:block;color:var(--muted);font-size:.82rem;margin:13px 0 6px}input:
 <div><label>Long break · minutes</label><input id="long" type="number" min="1" max="120"></div><div><label>Focus sessions</label><input id="sessions" type="number" min="1" max="12"></div></div>
 <label class="check-row"><input id="escape-enabled" type="checkbox"> Allow Esc to toggle fullscreen</label>
 <button class="button primary" style="width:100%;margin-top:16px" onclick="saveSettings()">Save settings</button><div id="message" class="message"></div></section>
+<section class="card"><div class="eyebrow">STAY ON TASK</div><p id="alt-tab-description" class="today">Block Alt+Tab, Win+Tab, and taskbar app switching while Pomodoro Focus is running.</p><button id="alt-tab-toggle" class="button primary" style="width:100%" onclick="toggleAltTab()">Disable app switching</button></section>
 </main><script>
 const colors={study:'#f38ba8',short_break:'#a6e3a1',long_break:'#89b4fa'};
 const field=id=>document.getElementById(id);
@@ -492,9 +573,10 @@ function pin(){return document.querySelector('#pin').value.trim()}
 async function post(path,data){const response=await fetch(path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({...data,token:pin()})});const result=await response.json();if(!response.ok)throw Error(result.error||'Request failed');return result}
 async function sendCommand(command){try{await post('/command',{command});message('Command sent')}catch(error){message(error.message,true)}}
 async function toggleBlocking(){try{const blocked=document.querySelector('#block-toggle').dataset.blocked!=='true';const result=await post('/blocking',{blocked});message(result.warning|| (blocked?'Distracting sites blocked':'Sites unblocked'),Boolean(result.warning))}catch(error){message(error.message,true)}}
+async function toggleAltTab(){const button=document.querySelector('#alt-tab-toggle');try{const blocked=button.dataset.blocked!=='true';await post('/alt-tab',{blocked});message(blocked?'App switching disabled while Pomodoro Focus is running':'App switching enabled')}catch(error){message(error.message,true)}}
 function message(text,error=false){const el=document.querySelector('#message');el.textContent=text;el.style.color=error?'#f38ba8':'#a6e3a1'}
 async function saveSettings(){try{await post('/settings',{study_minutes:+field('study').value,short_break_minutes:+field('short').value,long_break_minutes:+field('long').value,sessions_before_long_break:+field('sessions').value,escape_exits_fullscreen:field('escape-enabled').checked});message('Settings saved')}catch(error){message(error.message,true)}}
 let loaded=false;
-async function refresh(){try{const s=await(await fetch('/status')).json();const mode=s.mode;document.documentElement.style.setProperty('--accent',colors[mode]||'#f38ba8');document.querySelector('#mode').textContent=mode.replace('_',' ').toUpperCase();document.querySelector('#clock').textContent=String(Math.floor(s.remaining_seconds/60)).padStart(2,'0')+':'+String(s.remaining_seconds%60).padStart(2,'0');document.querySelector('#today').textContent='Today · '+Math.floor(s.today_total_seconds/3600)+'h '+Math.floor(s.today_total_seconds%3600/60)+'m';document.querySelector('#toggle').textContent=s.running?'Pause':'Start';document.querySelector('#toggle').onclick=()=>sendCommand(s.running?'pause':'start');const blockButton=document.querySelector('#block-toggle');blockButton.dataset.blocked=String(s.sites_blocked);blockButton.textContent=s.sites_blocked?'Unblock distracting sites':'Block distracting sites';document.querySelector('#block-description').textContent=s.hosts_block_active?'Blocking is active across Windows and in the browser extension.':s.sites_blocked?'Browser extension blocking is on. Run the desktop app as Administrator for system-wide blocking.':'Block Instagram, YouTube, TikTok, and Facebook across Windows and supported browsers.';if(!loaded){field('study').value=s.study_minutes;field('short').value=s.short_break_minutes;field('long').value=s.long_break_minutes;field('sessions').value=s.sessions_before_long_break;field('escape-enabled').checked=s.escape_exits_fullscreen;loaded=true}}catch(_){document.querySelector('#mode').textContent='PC NOT CONNECTED'}}
+async function refresh(){try{const s=await(await fetch('/status')).json();const mode=s.mode;document.documentElement.style.setProperty('--accent',colors[mode]||'#f38ba8');document.querySelector('#mode').textContent=mode.replace('_',' ').toUpperCase();document.querySelector('#clock').textContent=String(Math.floor(s.remaining_seconds/60)).padStart(2,'0')+':'+String(s.remaining_seconds%60).padStart(2,'0');document.querySelector('#today').textContent='Today · '+Math.floor(s.today_total_seconds/3600)+'h '+Math.floor(s.today_total_seconds%3600/60)+'m';document.querySelector('#toggle').textContent=s.running?'Pause':'Start';document.querySelector('#toggle').onclick=()=>sendCommand(s.running?'pause':'start');const blockButton=document.querySelector('#block-toggle');blockButton.dataset.blocked=String(s.sites_blocked);blockButton.textContent=s.sites_blocked?'Unblock distracting sites':'Block distracting sites';document.querySelector('#block-description').textContent=s.hosts_block_active?'Blocking is active across Windows and in the browser extension.':s.sites_blocked?'Browser extension blocking is on. Run the desktop app as Administrator for system-wide blocking.':'Block Instagram, YouTube, TikTok, and Facebook across Windows and supported browsers.';const altTabButton=document.querySelector('#alt-tab-toggle');altTabButton.dataset.blocked=String(s.alt_tab_blocked);altTabButton.textContent=s.alt_tab_blocked?'Enable app switching':'Disable app switching';document.querySelector('#alt-tab-description').textContent=s.alt_tab_error||'Block Alt+Tab, Win+Tab, and taskbar app switching while Pomodoro Focus is running.';if(!loaded){field('study').value=s.study_minutes;field('short').value=s.short_break_minutes;field('long').value=s.long_break_minutes;field('sessions').value=s.sessions_before_long_break;field('escape-enabled').checked=s.escape_exits_fullscreen;loaded=true}}catch(_){document.querySelector('#mode').textContent='PC NOT CONNECTED'}}
 refresh();setInterval(refresh,1000);
 </script></body></html>"###;

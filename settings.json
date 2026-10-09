@@ -1,7 +1,8 @@
 {
-  "study_minutes": 25,
+  "study_minutes": 30,
   "short_break_minutes": 5,
   "long_break_minutes": 15,
   "sessions_before_long_break": 4,
-  "escape_exits_fullscreen": true
+  "escape_exits_fullscreen": true,
+  "block_alt_tab": true
 }

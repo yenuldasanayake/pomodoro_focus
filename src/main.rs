@@ -1,3 +1,4 @@
+mod alt_tab;
 mod app;
 mod audio;
 mod charts;

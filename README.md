@@ -30,6 +30,12 @@ temporarily lock PIN-protected actions.
 The phone page's **Allow Esc to toggle fullscreen** checkbox is included in
 the timer settings and takes effect after **Save settings**.
 
+The phone page can also block **Alt+Tab**, **Win+Tab**, and left-clicks on the
+taskbar to prevent switching apps while Pomodoro Focus is running. This is a
+focus aid, not a kiosk lock: other Windows system interfaces may still allow
+switching. The block is released when the desktop app exits and will be
+enabled again on the next launch if the setting is still on.
+
 The phone page has a **Block sites** switch for Instagram, YouTube, TikTok, and
 Facebook. The switch writes a clearly marked section in the Windows hosts file,
 flushes the DNS cache, and removes only that managed section when you turn
@@ -58,7 +64,7 @@ is unavailable.
 
 ## Data files
 
-- `settings.json` stores timer lengths and the session cycle.
+- `settings.json` stores timer lengths, the session cycle, and keyboard options.
 - `data/history.json` stores study seconds by local calendar date.
 - `data/notes.json` stores completed-session notes, timestamps, durations, and
   optional subject tags.

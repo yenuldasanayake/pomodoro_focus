@@ -14,6 +14,7 @@ pub struct Settings {
     pub long_break_minutes: u32,
     pub sessions_before_long_break: u32,
     pub escape_exits_fullscreen: bool,
+    pub block_alt_tab: bool,
 }
 
 impl Default for Settings {
@@ -24,6 +25,7 @@ impl Default for Settings {
             long_break_minutes: 15,
             sessions_before_long_break: 4,
             escape_exits_fullscreen: false,
+            block_alt_tab: false,
         }
     }
 }
@@ -49,6 +51,20 @@ mod settings_tests {
         .unwrap();
 
         assert!(!settings.escape_exits_fullscreen);
+        assert!(!settings.block_alt_tab);
+    }
+
+    #[test]
+    fn alt_tab_block_setting_is_persisted() {
+        let settings = Settings {
+            block_alt_tab: true,
+            ..Settings::default()
+        };
+
+        let saved = serde_json::to_string(&settings).unwrap();
+        let loaded: Settings = serde_json::from_str(&saved).unwrap();
+
+        assert!(loaded.block_alt_tab);
     }
 }
 
