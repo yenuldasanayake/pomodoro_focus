@@ -3,5 +3,5 @@
   "short_break_minutes": 5,
   "long_break_minutes": 15,
   "sessions_before_long_break": 4,
-  "escape_exits_fullscreen": false
+  "escape_exits_fullscreen": true
 }
