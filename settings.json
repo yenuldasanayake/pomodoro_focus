@@ -5,5 +5,7 @@
   "sessions_before_long_break": 4,
   "escape_exits_fullscreen": true,
   "block_alt_tab": true,
-  "sites_blocked": true
+  "sites_blocked": true,
+  "pin": "80455052",
+  "port": 56987
 }

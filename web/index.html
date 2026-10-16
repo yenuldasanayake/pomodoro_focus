@@ -237,7 +237,12 @@ async function post(path,data){
     body:JSON.stringify({...data,token:pin()})
   });
   const result=await res.json().catch(()=>({}));
-  if(!res.ok)throw new Error(result.error||("Request failed ("+res.status+")"));
+  if(!res.ok){
+    // If the PIN was rotated on the desktop, clear it so the user is
+    // prompted to re-enter the new one.
+    if(res.status===401)localStorage.removeItem(PIN_KEY);
+    throw new Error(result.error||("Request failed ("+res.status+")"));
+  }
   if(!path.endsWith("/status"))localStorage.setItem(PIN_KEY,pin());
   return result;
 }

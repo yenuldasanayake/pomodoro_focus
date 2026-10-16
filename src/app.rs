@@ -23,9 +23,7 @@ pub struct PomodoroApp {
 impl PomodoroApp {
     pub fn new(ctx: &eframe::CreationContext<'_>) -> Result<Self, getrandom::Error> {
         let storage = Storage::new(".");
-        let pin = server::generate_pin()?;
-        let url = server::local_url();
-        let state = AppState::new(ctx.egui_ctx.clone(), storage, pin, url);
+        let state = AppState::new(ctx.egui_ctx.clone(), storage)?;
         let previous_mode = state.timer.mode;
         let transition_from = theme::accent(previous_mode);
         let shared = Arc::new(Mutex::new(state));
@@ -157,13 +155,13 @@ impl eframe::App for PomodoroApp {
         }
     }
 
-   fn on_exit(&mut self) {
-    if let Ok(mut state) = self.shared.lock() {
-        state.flush_all();
-        let _ = alt_tab::set_blocked(false);
-        let _ = site_blocker::set_blocked(false);
+    fn on_exit(&mut self) {
+        if let Ok(mut state) = self.shared.lock() {
+            state.flush_all();
+            let _ = alt_tab::set_blocked(false);
+            let _ = site_blocker::set_blocked(false);
+        }
     }
-}
 }
 
 impl PomodoroApp {
@@ -297,7 +295,12 @@ impl PomodoroApp {
                                 .color(theme::MUTED),
                         );
                         ui.horizontal(|ui| {
-                            ui.label(egui::RichText::new(&state.local_url).color(theme::TEXT));
+                            let url = if state.local_url.is_empty() {
+                                "starting…".to_owned()
+                            } else {
+                                state.local_url.clone()
+                            };
+                            ui.label(egui::RichText::new(&url).color(theme::TEXT));
                             ui.label(
                                 egui::RichText::new(format!(" · PIN  {}", state.pin))
                                     .strong()
@@ -305,10 +308,43 @@ impl PomodoroApp {
                             );
                         });
                     });
-                    if ui.button("Copy URL").clicked() {
-                        ui.ctx().copy_text(state.local_url.clone());
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui.button("Copy URL").clicked() && !state.local_url.is_empty() {
+                            ui.ctx().copy_text(state.local_url.clone());
+                        }
+                    });
+                });
+
+                ui.add_space(6.0);
+                ui.horizontal(|ui| {
+                    if ui.button("New PIN").clicked() {
+                        match state.rotate_pin() {
+                            Ok(()) => state.error_message = None,
+                            Err(error) => state.error_message = Some(error),
+                        }
+                    }
+                    if ui.button("New port").clicked() {
+                        match state.request_new_port() {
+                            Ok(()) => state.error_message = None,
+                            Err(error) => state.error_message = Some(error),
+                        }
+                    }
+                    if ui.button("Auto port").clicked() {
+                        match state.request_auto_port() {
+                            Ok(()) => state.error_message = None,
+                            Err(error) => state.error_message = Some(error),
+                        }
                     }
                 });
+
+                if state.port_change_pending {
+                    ui.label(
+                        egui::RichText::new("Restart the app to apply the new port.")
+                            .size(12.0)
+                            .color(Color32::from_rgb(250, 179, 135)),
+                    );
+                }
+
                 ui.label(
                     egui::RichText::new(
                         "Open this address on a phone connected to the same Wi-Fi.",

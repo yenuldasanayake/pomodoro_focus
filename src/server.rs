@@ -30,6 +30,8 @@ pub struct AppState {
     pub notes: Notes,
     pub timer: Timer,
     pub pin: String,
+    pub port: u16,
+    pub port_change_pending: bool,
     pub local_url: String,
     pub sites_blocked: bool,
     pub hosts_block_active: bool,
@@ -48,16 +50,17 @@ pub struct AppState {
 }
 
 impl AppState {
-    pub fn new(ctx: egui::Context, storage: Storage, pin: String, local_url: String) -> Self {
+    pub fn new(
+        ctx: egui::Context,
+        storage: Storage,
+    ) -> Result<Self, getrandom::Error> {
         let mut warnings: Vec<String> = Vec::new();
-        let mut settings = load_with_warning(storage.load_settings(), "settings", &mut warnings);
+        let mut settings =
+            load_with_warning(storage.load_settings(), "settings", &mut warnings);
         let history = load_with_warning(storage.load_history(), "history", &mut warnings);
         let notes = load_with_warning(storage.load_notes(), "notes", &mut warnings);
 
-        // One-shot migration from the old data/blocking.json file. If it exists
-        // and contains sites_blocked: true, carry the value into settings.json
-        // and remove the legacy file. Safe to run repeatedly; does nothing once
-        // the file is gone.
+        // One-shot migration from the old data/blocking.json file.
         if let Some(legacy) = read_legacy_blocking() {
             if legacy && !settings.sites_blocked {
                 settings.sites_blocked = legacy;
@@ -68,6 +71,14 @@ impl AppState {
             let path = std::path::Path::new("data").join("blocking.json");
             if let Err(error) = std::fs::remove_file(&path) {
                 eprintln!("Could not remove legacy {}: {error}", path.display());
+            }
+        }
+
+        // Generate and persist a PIN if we don't have one yet.
+        if settings.pin.is_empty() {
+            settings.pin = generate_pin()?;
+            if let Err(error) = storage.save_settings(&settings) {
+                warnings.push(format!("Could not save the initial PIN: {error}"));
             }
         }
 
@@ -98,29 +109,34 @@ impl AppState {
         } else {
             Some(warnings.join(" · "))
         };
+let pin = settings.pin.clone();
+let port = settings.port;
+let sites_blocked = settings.sites_blocked;
 
-        Self {
-            sites_blocked: settings.sites_blocked,
-            hosts_block_active,
-            settings,
-            history,
-            notes,
-            timer,
-            pin,
-            local_url,
-            alt_tab_block_active,
-            alt_tab_error,
-            server_error: None,
-            pending_note_duration: None,
-            error_message,
-            ctx,
-            auth_failures: 0,
-            auth_window_started: Instant::now(),
-            auth_locked_until: None,
-            storage,
-            history_dirty: false,
-            last_history_flush: Instant::now(),
-        }
+Ok(Self {
+    settings,
+    history,
+    notes,
+    timer,
+    pin,
+    port,
+    port_change_pending: false,
+    local_url: String::new(),
+    sites_blocked,
+    hosts_block_active,
+    alt_tab_block_active,
+    alt_tab_error,
+    server_error: None,
+    pending_note_duration: None,
+    error_message,
+    ctx,
+    auth_failures: 0,
+    auth_window_started: Instant::now(),
+    auth_locked_until: None,
+    storage,
+    history_dirty: false,
+    last_history_flush: Instant::now(),
+})
     }
 
     pub fn tick(&mut self) {
@@ -139,7 +155,8 @@ impl AppState {
         if let Some(mode) = completed {
             audio::play_completion_beep();
             if mode == Mode::Study {
-                self.pending_note_duration = Some(u64::from(self.settings.study_minutes) * 60);
+                self.pending_note_duration =
+                    Some(u64::from(self.settings.study_minutes) * 60);
             }
             self.flush_history();
             self.ctx.request_repaint();
@@ -188,8 +205,11 @@ impl AppState {
     pub fn update_settings(&mut self, mut settings: Settings) -> Result<(), String> {
         self.tick();
         settings.sanitize();
+        // Fields the phone UI doesn't manage — preserve them.
         settings.block_alt_tab = self.settings.block_alt_tab;
         settings.sites_blocked = self.settings.sites_blocked;
+        settings.pin = self.settings.pin.clone();
+        settings.port = self.settings.port;
         self.storage
             .save_settings(&settings)
             .map_err(|error| format!("Could not save settings: {error}"))?;
@@ -317,6 +337,56 @@ impl AppState {
         Ok(())
     }
 
+    pub fn rotate_pin(&mut self) -> Result<(), String> {
+        let new_pin = generate_pin()
+            .map_err(|error| format!("Could not generate a new PIN: {error}"))?;
+        let mut settings = self.settings.clone();
+        settings.pin = new_pin.clone();
+        self.storage
+            .save_settings(&settings)
+            .map_err(|error| format!("Could not save the new PIN: {error}"))?;
+        self.settings = settings;
+        self.pin = new_pin;
+        self.ctx.request_repaint();
+        Ok(())
+    }
+
+    /// Pick a new free port and persist it. Takes effect on next app launch.
+    pub fn request_new_port(&mut self) -> Result<(), String> {
+        let probe = std::net::TcpListener::bind("0.0.0.0:0")
+            .map_err(|error| format!("Could not probe for a free port: {error}"))?;
+        let port = probe
+            .local_addr()
+            .map_err(|error| format!("Could not read the probed port: {error}"))?
+            .port();
+        drop(probe);
+
+        let mut settings = self.settings.clone();
+        settings.port = port;
+        self.storage
+            .save_settings(&settings)
+            .map_err(|error| format!("Could not save the new port: {error}"))?;
+        self.settings = settings;
+        self.port = port;
+        self.port_change_pending = true;
+        self.ctx.request_repaint();
+        Ok(())
+    }
+
+    /// Reset to "OS picks a free port each launch". Takes effect on restart.
+    pub fn request_auto_port(&mut self) -> Result<(), String> {
+        let mut settings = self.settings.clone();
+        settings.port = 0;
+        self.storage
+            .save_settings(&settings)
+            .map_err(|error| format!("Could not save the port setting: {error}"))?;
+        self.settings = settings;
+        self.port = 0;
+        self.port_change_pending = true;
+        self.ctx.request_repaint();
+        Ok(())
+    }
+
     fn collect_study_time(&mut self) {
         let studied = self.timer.take_study_seconds();
         if studied > 0 {
@@ -357,13 +427,9 @@ fn read_legacy_blocking() -> Option<bool> {
 pub fn generate_pin() -> Result<String, getrandom::Error> {
     let mut bytes = [0u8; 4];
     getrandom::fill(&mut bytes)?;
-    // Avoid leading zeros so phone entry is unambiguous.
+    // 8 digits, no leading zeros, so phone entry is unambiguous.
     let value = 10_000_000 + (u32::from_ne_bytes(bytes) % 90_000_000);
     Ok(value.to_string())
-}
-
-pub fn local_url() -> String {
-    local_url_for_port(5000)
 }
 
 pub fn local_url_for_port(port: u16) -> String {
@@ -389,14 +455,31 @@ pub fn start_server(state: SharedState) {
             }
         };
 
-        let listener = match runtime.block_on(TcpListener::bind("0.0.0.0:0")) {
+        let desired_port = match state.lock() {
+            Ok(state) => state.port,
+            Err(_) => 0,
+        };
+
+        let listener = match runtime.block_on(TcpListener::bind(("0.0.0.0", desired_port))) {
             Ok(listener) => listener,
             Err(error) => {
                 report_server_error(
                     &state,
-                    format!("Could not bind phone server: {error}"),
+                    format!(
+                        "Could not bind port {desired_port} ({error}); \
+                         falling back to an OS-assigned port."
+                    ),
                 );
-                return;
+                match runtime.block_on(TcpListener::bind("0.0.0.0:0")) {
+                    Ok(listener) => listener,
+                    Err(error) => {
+                        report_server_error(
+                            &state,
+                            format!("Could not bind phone server: {error}"),
+                        );
+                        return;
+                    }
+                }
             }
         };
 
@@ -413,6 +496,16 @@ pub fn start_server(state: SharedState) {
 
         if let Ok(mut state) = state.lock() {
             state.local_url = local_url_for_port(port);
+            if state.port != port {
+                state.port = port;
+                state.port_change_pending = false;
+                let mut settings = state.settings.clone();
+                settings.port = port;
+                if let Err(error) = state.storage.save_settings(&settings) {
+                    eprintln!("Could not persist the actual port: {error}");
+                }
+                state.settings = settings;
+            }
             state.ctx.request_repaint();
         }
 
@@ -579,6 +672,8 @@ async fn update_settings(
         escape_exits_fullscreen: request.escape_exits_fullscreen,
         block_alt_tab: state.settings.block_alt_tab,
         sites_blocked: state.settings.sites_blocked,
+        pin: state.settings.pin.clone(),
+        port: state.settings.port,
     };
     state
         .update_settings(settings)

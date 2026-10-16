@@ -16,6 +16,13 @@ pub struct Settings {
     pub escape_exits_fullscreen: bool,
     pub block_alt_tab: bool,
     pub sites_blocked: bool,
+    /// Eight-digit PIN shown on the desktop and typed into the phone page.
+    /// An empty string means "no PIN chosen yet" — `AppState::new` generates
+    /// one and persists it on first launch.
+    pub pin: String,
+    /// TCP port for the phone server. `0` means "let the OS pick a free port
+    /// on startup, then persist whatever we got".
+    pub port: u16,
 }
 
 impl Default for Settings {
@@ -28,6 +35,8 @@ impl Default for Settings {
             escape_exits_fullscreen: false,
             block_alt_tab: false,
             sites_blocked: false,
+            pin: String::new(),
+            port: 0,
         }
     }
 }
@@ -38,6 +47,18 @@ impl Settings {
         self.short_break_minutes = self.short_break_minutes.clamp(1, 60);
         self.long_break_minutes = self.long_break_minutes.clamp(1, 120);
         self.sessions_before_long_break = self.sessions_before_long_break.clamp(1, 12);
+        // Port 0 is legal ("pick any"); anything below 1024 is privileged and
+        // will usually fail for a normal user, so treat it as 0.
+        if self.port < 1024 {
+            self.port = 0;
+        }
+        // If a PIN is present, require exactly 8 numeric digits; otherwise clear
+        // it so the app regenerates on next launch.
+        if !self.pin.is_empty()
+            && (self.pin.len() != 8 || !self.pin.chars().all(|c| c.is_ascii_digit()))
+        {
+            self.pin.clear();
+        }
     }
 }
 
@@ -55,6 +76,8 @@ mod settings_tests {
         assert!(!settings.escape_exits_fullscreen);
         assert!(!settings.block_alt_tab);
         assert!(!settings.sites_blocked);
+        assert!(settings.pin.is_empty());
+        assert_eq!(settings.port, 0);
     }
 
     #[test]
@@ -81,6 +104,47 @@ mod settings_tests {
         let loaded: Settings = serde_json::from_str(&saved).unwrap();
 
         assert!(loaded.sites_blocked);
+    }
+
+    #[test]
+    fn pin_and_port_round_trip() {
+        let settings = Settings {
+            pin: "12345678".to_owned(),
+            port: 51234,
+            ..Settings::default()
+        };
+
+        let saved = serde_json::to_string(&settings).unwrap();
+        let loaded: Settings = serde_json::from_str(&saved).unwrap();
+
+        assert_eq!(loaded.pin, "12345678");
+        assert_eq!(loaded.port, 51234);
+    }
+
+    #[test]
+    fn sanitize_rejects_malformed_pin_and_privileged_port() {
+        let mut settings = Settings {
+            pin: "abc".to_owned(),
+            port: 80,
+            ..Settings::default()
+        };
+        settings.sanitize();
+
+        assert!(settings.pin.is_empty());
+        assert_eq!(settings.port, 0);
+    }
+
+    #[test]
+    fn sanitize_accepts_valid_pin_and_high_port() {
+        let mut settings = Settings {
+            pin: "98765432".to_owned(),
+            port: 51234,
+            ..Settings::default()
+        };
+        settings.sanitize();
+
+        assert_eq!(settings.pin, "98765432");
+        assert_eq!(settings.port, 51234);
     }
 }
 
