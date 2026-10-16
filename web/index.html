@@ -39,7 +39,6 @@ h1{font-size:1.35rem;margin:6px 0 22px;font-weight:600;letter-spacing:-.01em}
   backdrop-filter:blur(8px);
   transition:border-color .3s ease;
 }
-.card.tight{padding:16px 18px}
 
 .timer{text-align:center;padding:30px 22px 24px}
 .mode{display:inline-flex;align-items:center;gap:8px;color:var(--accent);font-size:.72rem;letter-spacing:.2em;font-weight:700;transition:color .4s ease}
@@ -54,7 +53,6 @@ h1{font-size:1.35rem;margin:6px 0 22px;font-weight:600;letter-spacing:-.01em}
   font-size:clamp(3.2rem,16vw,4.6rem);font-weight:200;letter-spacing:-.06em;
   font-variant-numeric:tabular-nums;line-height:1;
 }
-.clock small{font-size:.5em;color:var(--muted);font-weight:400;letter-spacing:0;margin-left:6px}
 .today{color:var(--muted);font-size:.88rem;margin-top:4px}
 
 .buttons{display:flex;gap:10px;margin-top:20px}
@@ -67,9 +65,11 @@ h1{font-size:1.35rem;margin:6px 0 22px;font-weight:600;letter-spacing:-.01em}
 }
 .button.primary{background:var(--accent);color:#181825;transition:background .4s ease,transform .08s ease}
 .button.ghost{background:transparent;border:1px solid var(--border);color:var(--muted)}
+.button.danger{background:transparent;border:1px solid var(--accent);color:var(--accent)}
 .button:active{transform:scale(.97)}
 .button:disabled{opacity:.45;cursor:not-allowed}
 .button.wide{width:100%}
+.button.small{padding:8px 12px;font-size:.82rem}
 
 .stats{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:16px;padding-top:16px;border-top:1px solid var(--border)}
 .stat{text-align:center}
@@ -93,7 +93,7 @@ input:focus{outline:none;border-color:var(--accent)}
 .notes-list{margin-top:12px;display:flex;flex-direction:column;gap:8px}
 .note{
   background:var(--bg2);border:1px solid var(--border);border-radius:14px;
-  padding:12px 14px;display:flex;flex-direction:column;gap:4px;
+  padding:12px 14px;display:flex;flex-direction:column;gap:6px;
 }
 .note .head{display:flex;justify-content:space-between;align-items:center;gap:8px}
 .note .subject{
@@ -103,8 +103,27 @@ input:focus{outline:none;border-color:var(--accent)}
 }
 .note .when{color:var(--muted);font-size:.72rem;font-variant-numeric:tabular-nums}
 .note .body{font-size:.9rem;line-height:1.4;word-break:break-word}
+.note .footer{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-top:2px}
 .note .dur{color:var(--muted);font-size:.72rem}
+.note .actions{display:flex;gap:6px}
+.note .icon-btn{
+  background:transparent;border:1px solid var(--border);color:var(--muted);
+  border-radius:9px;padding:5px 9px;font-size:.72rem;font-weight:600;
+  cursor:pointer;font-family:inherit;
+}
+.note .icon-btn:active{transform:scale(.96)}
+.note .icon-btn.danger{color:var(--accent);border-color:color-mix(in srgb,var(--accent) 50%,var(--border))}
+.note-editing{background:var(--panel2)}
+.note-editing .edit-fields{display:flex;flex-direction:column;gap:6px;margin-top:6px}
 .empty{color:var(--muted);font-size:.85rem;text-align:center;padding:14px 0}
+.note-toast{
+  position:fixed;left:50%;bottom:calc(78px + env(safe-area-inset-bottom));
+  transform:translateX(-50%);background:var(--panel2);
+  border:1px solid var(--border);border-radius:12px;padding:10px 14px;
+  font-size:.82rem;opacity:0;transition:opacity .2s ease;pointer-events:none;
+  z-index:45;
+}
+.note-toast.show{opacity:1}
 
 .toasts{position:fixed;left:50%;bottom:calc(20px + env(safe-area-inset-bottom));transform:translateX(-50%);display:flex;flex-direction:column;gap:8px;z-index:50;pointer-events:none;width:min(100% - 32px,420px)}
 .toast{
@@ -164,7 +183,7 @@ body.flash::before{
     <input id="note-body" placeholder="Finished chapter 4 of Rust book">
     <label for="note-subject">Subject</label>
     <input id="note-subject" placeholder="Rust">
-    <button class="button primary wide" style="margin-top:14px" onclick="saveNote()">Save note</button>
+    <button class="button primary wide" style="margin-top:14px" id="note-save-btn" onclick="saveNote()">Save note</button>
   </section>
 
   <section class="card">
@@ -204,6 +223,7 @@ body.flash::before{
   </section>
 </main>
 
+<div class="note-toast" id="note-toast"></div>
 <div class="toasts" id="toasts"></div>
 
 <script>
@@ -218,6 +238,17 @@ let lastMode=null;
 let lastRunning=null;
 let pollTimer=null;
 
+// Id of the note currently being edited, or null when not editing.
+let editingId=null;
+// Draft buffer for the note being edited. This is the source of truth
+// for the input fields, so re-renders can't clobber the user's typing.
+let editDraft={accomplishment:"",subject:""};
+// Signature of last rendered notes list, so we don't rebuild the DOM
+// on every poll.
+let lastNoteSignature="";
+// Cache of the notes we last rendered, used for Cancel/Edit.
+let lastNotes=[];
+
 function pin(){return $("pin").value.trim()}
 function forgetPin(){localStorage.removeItem(PIN_KEY);$("pin").value="";toast("PIN forgotten")}
 (function hydratePin(){const s=localStorage.getItem(PIN_KEY);if(s)$("pin").value=s})();
@@ -229,6 +260,12 @@ function toast(text,kind){
   $("toasts").appendChild(el);
   setTimeout(()=>{el.style.opacity="0";el.style.transition="opacity .3s";setTimeout(()=>el.remove(),300)},3200);
 }
+function noteToast(text){
+  const el=$("note-toast");
+  el.textContent=text;
+  el.classList.add("show");
+  setTimeout(()=>el.classList.remove("show"),1600);
+}
 
 async function post(path,data){
   const res=await fetch(path,{
@@ -238,8 +275,6 @@ async function post(path,data){
   });
   const result=await res.json().catch(()=>({}));
   if(!res.ok){
-    // If the PIN was rotated on the desktop, clear it so the user is
-    // prompted to re-enter the new one.
     if(res.status===401)localStorage.removeItem(PIN_KEY);
     throw new Error(result.error||("Request failed ("+res.status+")"));
   }
@@ -282,13 +317,66 @@ async function saveSettings(){
 async function saveNote(){
   const body=$("note-body").value.trim();
   if(!body){toast("Write something first","warn");return}
+  const btn=$("note-save-btn");
+  btn.disabled=true;
   try{
     await post("/notes",{accomplishment:body,subject:$("note-subject").value.trim()});
     $("note-body").value="";$("note-subject").value="";
-    toast("Note saved");
+    noteToast("Note saved");
+    refresh();
+  }catch(e){toast(e.message,"error")}
+  finally{setTimeout(()=>{btn.disabled=false},400)}
+}
+
+async function updateNote(id){
+  const accomplishment=editDraft.accomplishment.trim();
+  const subject=editDraft.subject.trim();
+  if(!accomplishment){toast("Note text cannot be empty","warn");return}
+  try{
+    await post("/notes/update",{id,accomplishment,subject});
+    editingId=null;
+    editDraft={accomplishment:"",subject:""};
+    noteToast("Note updated");
+    // Force the next refresh to re-render with the new text.
+    lastNoteSignature="";
     refresh();
   }catch(e){toast(e.message,"error")}
 }
+
+async function deleteNote(id){
+  if(!confirm("Delete this note?"))return;
+  try{
+    await post("/notes/delete",{id});
+    if(editingId===id){
+      editingId=null;
+      editDraft={accomplishment:"",subject:""};
+    }
+    noteToast("Note deleted");
+    lastNoteSignature="";
+    refresh();
+  }catch(e){toast(e.message,"error")}
+}
+
+function beginEdit(id){
+  const note=lastNotes.find(n=>n.id===id);
+  if(!note)return;
+  editingId=id;
+  editDraft={
+    accomplishment:note.accomplishment||"",
+    subject:note.subject||""
+  };
+  renderNotes(lastNotes);
+}
+
+function cancelEdit(){
+  editingId=null;
+  editDraft={accomplishment:"",subject:""};
+  renderNotes(lastNotes);
+}
+
+// Called on every keystroke in the edit form.
+function onEditAccInput(value){editDraft.accomplishment=value}
+function onEditSubjInput(value){editDraft.subject=value}
 
 function fmtClock(sec){
   const m=Math.floor(sec/60),s=sec%60;
@@ -310,18 +398,65 @@ function relTime(iso){
 function escapeHtml(s){
   return String(s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 }
+function escapeAttr(s){return escapeHtml(s)}
 
 function renderNotes(notes){
+  lastNotes=notes||[];
   const list=$("notes-list");
-  if(!notes||!notes.length){list.innerHTML='<div class="empty">No notes yet.</div>';return}
-  list.innerHTML=notes.slice().reverse().slice(0,8).map(n=>{
+  if(!lastNotes.length){
+    list.innerHTML='<div class="empty">No notes yet.</div>';
+    return;
+  }
+
+  // Preserve caret position within the edit form on re-render.
+  const active=document.activeElement;
+  const activeId=active&&active.id?active.id:null;
+  const selectionStart=
+    active&&"selectionStart" in active ? active.selectionStart : null;
+
+  list.innerHTML=lastNotes.slice(0,8).map(n=>{
+    if(editingId===n.id){
+      return '<div class="note note-editing">'+
+        '<div class="head"><span class="when">Editing note</span></div>'+
+        '<div class="edit-fields">'+
+          '<input id="edit-body" value="'+escapeAttr(editDraft.accomplishment)+
+            '" placeholder="Accomplishment" oninput="onEditAccInput(this.value)">'+
+          '<input id="edit-subject" value="'+escapeAttr(editDraft.subject)+
+            '" placeholder="Subject (optional)" oninput="onEditSubjInput(this.value)">'+
+        '</div>'+
+        '<div class="footer">'+
+          '<span class="dur">'+(n.duration_seconds?fmtDuration(n.duration_seconds):"")+'</span>'+
+          '<div class="actions">'+
+            '<button class="icon-btn" onclick="cancelEdit()">Cancel</button>'+
+            '<button class="icon-btn" onclick="updateNote(\''+escapeAttr(n.id)+'\')">Save</button>'+
+          '</div>'+
+        '</div>'+
+      '</div>';
+    }
     const subj=n.subject?'<span class="subject">'+escapeHtml(n.subject)+"</span>":"";
-    const dur=n.duration_seconds?'<span class="dur">'+fmtDuration(n.duration_seconds)+"</span>":"";
-    return '<div class="note"><div class="head">'+subj+'<span class="when">'+relTime(n.timestamp)+"</span></div>"+
-           '<div class="body">'+escapeHtml(n.accomplishment||"(no description)")+"</div>"+
-           (dur?'<div class="head">'+dur+"</div>":"")+
-           "</div>";
+    const edited=n.updated_at?' · edited':'';
+    const dur=n.duration_seconds?'<span class="dur">'+fmtDuration(n.duration_seconds)+edited+'</span>':'';
+    return '<div class="note">'+
+      '<div class="head">'+subj+'<span class="when">'+relTime(n.timestamp)+"</span></div>"+
+      '<div class="body">'+escapeHtml(n.accomplishment||"(no description)")+"</div>"+
+      '<div class="footer">'+dur+
+        '<div class="actions">'+
+          '<button class="icon-btn" onclick="beginEdit(\''+escapeAttr(n.id)+'\')">Edit</button>'+
+          '<button class="icon-btn danger" onclick="deleteNote(\''+escapeAttr(n.id)+'\')">Delete</button>'+
+        '</div>'+
+      '</div>'+
+    '</div>';
   }).join("");
+
+  if(activeId){
+    const restored=document.getElementById(activeId);
+    if(restored&&restored.focus){
+      restored.focus();
+      if(selectionStart!=null&&restored.setSelectionRange){
+        try{restored.setSelectionRange(selectionStart,selectionStart)}catch(_){}
+      }
+    }
+  }
 }
 
 function applyMode(mode){
@@ -341,7 +476,6 @@ async function refresh(){
       document.body.classList.add("flash");
       setTimeout(()=>document.body.classList.remove("flash"),900);
       if(navigator.vibrate)navigator.vibrate([80,40,80]);
-      renderNotes(s.notes||[]);
     }
     lastMode=s.mode;
     applyMode(s.mode);
@@ -389,7 +523,19 @@ async function refresh(){
       loaded=true;
     }
 
-    renderNotes(s.notes||[]);
+    // CRITICAL: do not rebuild the notes list while the user is editing.
+    // The DOM inputs hold the draft, and any re-render would clobber them.
+    if(editingId===null){
+      const signature=JSON.stringify(s.notes||[]);
+      if(signature!==lastNoteSignature){
+        lastNoteSignature=signature;
+        renderNotes(s.notes||[]);
+      }
+    }else{
+      // Keep lastNotes fresh so Cancel/Edit see current data, but do
+      // NOT touch the DOM.
+      lastNotes=s.notes||[];
+    }
   }catch(_){
     document.body.classList.add("offline");
     $("mode").textContent="PC NOT CONNECTED";

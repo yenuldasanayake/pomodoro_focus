@@ -1,6 +1,6 @@
 use crate::{
     alt_tab, audio, site_blocker,
-    storage::{History, Notes, Settings, Storage, StudyNote},
+    storage::{generate_id, History, Notes, Settings, Storage, StudyNote},
     timer::{Mode, Timer},
 };
 use axum::{
@@ -60,7 +60,6 @@ impl AppState {
         let history = load_with_warning(storage.load_history(), "history", &mut warnings);
         let notes = load_with_warning(storage.load_notes(), "notes", &mut warnings);
 
-        // One-shot migration from the old data/blocking.json file.
         if let Some(legacy) = read_legacy_blocking() {
             if legacy && !settings.sites_blocked {
                 settings.sites_blocked = legacy;
@@ -74,7 +73,6 @@ impl AppState {
             }
         }
 
-        // Generate and persist a PIN if we don't have one yet.
         if settings.pin.is_empty() {
             settings.pin = generate_pin()?;
             if let Err(error) = storage.save_settings(&settings) {
@@ -109,34 +107,35 @@ impl AppState {
         } else {
             Some(warnings.join(" · "))
         };
-let pin = settings.pin.clone();
-let port = settings.port;
-let sites_blocked = settings.sites_blocked;
 
-Ok(Self {
-    settings,
-    history,
-    notes,
-    timer,
-    pin,
-    port,
-    port_change_pending: false,
-    local_url: String::new(),
-    sites_blocked,
-    hosts_block_active,
-    alt_tab_block_active,
-    alt_tab_error,
-    server_error: None,
-    pending_note_duration: None,
-    error_message,
-    ctx,
-    auth_failures: 0,
-    auth_window_started: Instant::now(),
-    auth_locked_until: None,
-    storage,
-    history_dirty: false,
-    last_history_flush: Instant::now(),
-})
+        let pin = settings.pin.clone();
+        let port = settings.port;
+        let sites_blocked = settings.sites_blocked;
+
+        Ok(Self {
+            settings,
+            history,
+            notes,
+            timer,
+            pin,
+            port,
+            port_change_pending: false,
+            local_url: String::new(),
+            sites_blocked,
+            hosts_block_active,
+            alt_tab_block_active,
+            alt_tab_error,
+            server_error: None,
+            pending_note_duration: None,
+            error_message,
+            ctx,
+            auth_failures: 0,
+            auth_window_started: Instant::now(),
+            auth_locked_until: None,
+            storage,
+            history_dirty: false,
+            last_history_flush: Instant::now(),
+        })
     }
 
     pub fn tick(&mut self) {
@@ -205,7 +204,6 @@ Ok(Self {
     pub fn update_settings(&mut self, mut settings: Settings) -> Result<(), String> {
         self.tick();
         settings.sanitize();
-        // Fields the phone UI doesn't manage — preserve them.
         settings.block_alt_tab = self.settings.block_alt_tab;
         settings.sites_blocked = self.settings.sites_blocked;
         settings.pin = self.settings.pin.clone();
@@ -262,23 +260,75 @@ Ok(Self {
         &mut self,
         accomplishment: String,
         subject: Option<String>,
-    ) -> Result<(), String> {
+    ) -> Result<String, String> {
         let accomplishment = accomplishment.trim().to_owned();
+        if accomplishment.is_empty() {
+            return Err("Note text cannot be empty".to_owned());
+        }
         let subject = subject
             .map(|value| value.trim().to_owned())
             .filter(|value| !value.is_empty());
         let duration = self.pending_note_duration.unwrap_or_default();
+        let id = generate_id();
         self.notes.entries.push(StudyNote {
+            id: id.clone(),
             timestamp: Local::now().to_rfc3339(),
             duration_seconds: duration,
             accomplishment,
             subject,
+            updated_at: None,
         });
         if let Err(error) = self.storage.save_notes(&self.notes) {
             self.notes.entries.pop();
             return Err(format!("Could not save study note: {error}"));
         }
         self.pending_note_duration = None;
+        self.ctx.request_repaint();
+        Ok(id)
+    }
+
+    pub fn update_note(
+        &mut self,
+        id: &str,
+        accomplishment: String,
+        subject: Option<String>,
+    ) -> Result<(), String> {
+        let accomplishment = accomplishment.trim().to_owned();
+        if accomplishment.is_empty() {
+            return Err("Note text cannot be empty".to_owned());
+        }
+        let subject = subject
+            .map(|value| value.trim().to_owned())
+            .filter(|value| !value.is_empty());
+        let Some(index) = self.notes.find_index(id) else {
+            return Err("Note not found".to_owned());
+        };
+
+        let previous = self.notes.entries[index].clone();
+        {
+            let entry = &mut self.notes.entries[index];
+            entry.accomplishment = accomplishment;
+            entry.subject = subject;
+            entry.updated_at = Some(Local::now().to_rfc3339());
+        }
+
+        if let Err(error) = self.storage.save_notes(&self.notes) {
+            self.notes.entries[index] = previous;
+            return Err(format!("Could not save study note: {error}"));
+        }
+        self.ctx.request_repaint();
+        Ok(())
+    }
+
+    pub fn delete_note(&mut self, id: &str) -> Result<(), String> {
+        let Some(index) = self.notes.find_index(id) else {
+            return Err("Note not found".to_owned());
+        };
+        let removed = self.notes.entries.remove(index);
+        if let Err(error) = self.storage.save_notes(&self.notes) {
+            self.notes.entries.insert(index, removed);
+            return Err(format!("Could not delete study note: {error}"));
+        }
         self.ctx.request_repaint();
         Ok(())
     }
@@ -351,7 +401,6 @@ Ok(Self {
         Ok(())
     }
 
-    /// Pick a new free port and persist it. Takes effect on next app launch.
     pub fn request_new_port(&mut self) -> Result<(), String> {
         let probe = std::net::TcpListener::bind("0.0.0.0:0")
             .map_err(|error| format!("Could not probe for a free port: {error}"))?;
@@ -373,7 +422,6 @@ Ok(Self {
         Ok(())
     }
 
-    /// Reset to "OS picks a free port each launch". Takes effect on restart.
     pub fn request_auto_port(&mut self) -> Result<(), String> {
         let mut settings = self.settings.clone();
         settings.port = 0;
@@ -427,7 +475,6 @@ fn read_legacy_blocking() -> Option<bool> {
 pub fn generate_pin() -> Result<String, getrandom::Error> {
     let mut bytes = [0u8; 4];
     getrandom::fill(&mut bytes)?;
-    // 8 digits, no leading zeros, so phone entry is unambiguous.
     let value = 10_000_000 + (u32::from_ne_bytes(bytes) % 90_000_000);
     Ok(value.to_string())
 }
@@ -519,6 +566,8 @@ pub fn start_server(state: SharedState) {
             .route("/blocking", post(update_blocking))
             .route("/alt-tab", post(update_alt_tab))
             .route("/notes", post(add_note))
+            .route("/notes/update", post(update_note))
+            .route("/notes/delete", post(delete_note))
             .with_state(state.clone());
 
         eprintln!("Phone remote listening on 0.0.0.0:{port}");
@@ -557,10 +606,25 @@ async fn icon() -> impl IntoResponse {
 
 #[derive(Serialize)]
 struct NoteSummary {
+    id: String,
     timestamp: String,
     duration_seconds: u64,
     accomplishment: String,
     subject: Option<String>,
+    updated_at: Option<String>,
+}
+
+impl From<&StudyNote> for NoteSummary {
+    fn from(note: &StudyNote) -> Self {
+        Self {
+            id: note.id.clone(),
+            timestamp: note.timestamp.clone(),
+            duration_seconds: note.duration_seconds,
+            accomplishment: note.accomplishment.clone(),
+            subject: note.subject.clone(),
+            updated_at: note.updated_at.clone(),
+        }
+    }
 }
 
 #[derive(Serialize)]
@@ -595,12 +659,7 @@ async fn status(State(shared): State<SharedState>) -> Result<Json<StatusResponse
         .iter()
         .rev()
         .take(20)
-        .map(|note| NoteSummary {
-            timestamp: note.timestamp.clone(),
-            duration_seconds: note.duration_seconds,
-            accomplishment: note.accomplishment.clone(),
-            subject: note.subject.clone(),
-        })
+        .map(NoteSummary::from)
         .collect();
 
     Ok(Json(StatusResponse {
@@ -743,6 +802,34 @@ struct NoteRequest {
 async fn add_note(
     State(shared): State<SharedState>,
     Json(request): Json<NoteRequest>,
+) -> Result<Json<NoteCreatedResponse>, ApiError> {
+    let mut state = shared
+        .lock()
+        .map_err(|_| ApiError::internal("App state is unavailable"))?;
+    verify_token(&mut state, &request.token)?;
+    let subject = if request.subject.trim().is_empty() {
+        None
+    } else {
+        Some(request.subject)
+    };
+    let id = state
+        .save_note(request.accomplishment, subject)
+        .map_err(ApiError::bad_request)?;
+    Ok(Json(NoteCreatedResponse { ok: true, id }))
+}
+
+#[derive(Deserialize)]
+struct NoteUpdateRequest {
+    token: String,
+    id: String,
+    accomplishment: String,
+    #[serde(default)]
+    subject: String,
+}
+
+async fn update_note(
+    State(shared): State<SharedState>,
+    Json(request): Json<NoteUpdateRequest>,
 ) -> Result<Json<MessageResponse>, ApiError> {
     let mut state = shared
         .lock()
@@ -754,7 +841,30 @@ async fn add_note(
         Some(request.subject)
     };
     state
-        .save_note(request.accomplishment, subject)
+        .update_note(&request.id, request.accomplishment, subject)
+        .map_err(ApiError::bad_request)?;
+    Ok(Json(MessageResponse {
+        ok: true,
+        warning: None,
+    }))
+}
+
+#[derive(Deserialize)]
+struct NoteDeleteRequest {
+    token: String,
+    id: String,
+}
+
+async fn delete_note(
+    State(shared): State<SharedState>,
+    Json(request): Json<NoteDeleteRequest>,
+) -> Result<Json<MessageResponse>, ApiError> {
+    let mut state = shared
+        .lock()
+        .map_err(|_| ApiError::internal("App state is unavailable"))?;
+    verify_token(&mut state, &request.token)?;
+    state
+        .delete_note(&request.id)
         .map_err(ApiError::bad_request)?;
     Ok(Json(MessageResponse {
         ok: true,
@@ -792,6 +902,12 @@ struct MessageResponse {
     ok: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     warning: Option<String>,
+}
+
+#[derive(Serialize)]
+struct NoteCreatedResponse {
+    ok: bool,
+    id: String,
 }
 
 struct ApiError(StatusCode, String);

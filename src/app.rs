@@ -18,6 +18,14 @@ pub struct PomodoroApp {
     previous_mode: Mode,
     transition_from: Color32,
     transition_started: Instant,
+    editing_note: Option<EditingNote>,
+}
+
+#[derive(Clone)]
+struct EditingNote {
+    id: String,
+    accomplishment: String,
+    subject: String,
 }
 
 impl PomodoroApp {
@@ -35,6 +43,7 @@ impl PomodoroApp {
             previous_mode,
             transition_from,
             transition_started: Instant::now(),
+            editing_note: None,
         })
     }
 }
@@ -125,6 +134,8 @@ impl eframe::App for PomodoroApp {
                         ui.add_space(8.0);
                         self.show_settings(ui, &mut state);
                         charts::show(ui, &state.history, &state.notes);
+                        ui.add_space(14.0);
+                        self.show_notes_section(ui, &mut state);
                     });
             });
 
@@ -408,6 +419,216 @@ impl PomodoroApp {
         }
     }
 
+    fn show_notes_section(&mut self, ui: &mut egui::Ui, state: &mut AppState) {
+        ui.horizontal(|ui| {
+            ui.heading("Notes");
+            ui.label(
+                egui::RichText::new(format!("{} total", state.notes.entries.len()))
+                    .size(12.0)
+                    .color(theme::MUTED),
+            );
+        });
+        ui.add_space(6.0);
+
+        if state.notes.entries.is_empty() {
+            ui.label(
+                egui::RichText::new(
+                    "Finish a focus session or add a note from the phone to see it here.",
+                )
+                .color(theme::MUTED),
+            );
+            return;
+        }
+
+        struct Row {
+            id: String,
+            accomplishment: String,
+            subject: Option<String>,
+            duration_seconds: u64,
+            updated_at: Option<String>,
+        }
+
+        let rows: Vec<Row> = state
+            .notes
+            .entries
+            .iter()
+            .rev()
+            .map(|n| Row {
+                id: n.id.clone(),
+                accomplishment: n.accomplishment.clone(),
+                subject: n.subject.clone(),
+                duration_seconds: n.duration_seconds,
+                updated_at: n.updated_at.clone(),
+            })
+            .collect();
+
+        let mut pending_edit: Option<(String, String, String)> = None;
+        let mut pending_delete: Option<String> = None;
+        let mut cancel_edit = false;
+
+        for row in &rows {
+            let editing_this = self
+                .editing_note
+                .as_ref()
+                .is_some_and(|e| e.id == row.id);
+
+            egui::Frame::new()
+                .fill(theme::PANEL)
+                .corner_radius(12)
+                .inner_margin(egui::Margin::symmetric(14, 10))
+                .show(ui, |ui| {
+                    if editing_this {
+                        // Mutable borrow of the edit buffer. Its fields must
+                        // only be touched by the TextEdit widgets and by
+                        // Save/Cancel — never re-initialized from `row`.
+                        let editing = self.editing_note.as_mut().unwrap();
+
+                        ui.label(
+                            egui::RichText::new("Editing note")
+                                .size(11.0)
+                                .strong()
+                                .color(theme::MUTED),
+                        );
+                        ui.add_space(4.0);
+
+                        ui.label(
+                            egui::RichText::new("Accomplishment")
+                                .size(11.0)
+                                .color(theme::MUTED),
+                        );
+                        ui.add(
+                            egui::TextEdit::singleline(&mut editing.accomplishment)
+                                .id(egui::Id::new(("note-edit-acc", &editing.id))),
+                        );
+
+                        ui.label(
+                            egui::RichText::new("Subject")
+                                .size(11.0)
+                                .color(theme::MUTED),
+                        );
+                        ui.add(
+                            egui::TextEdit::singleline(&mut editing.subject)
+                                .id(egui::Id::new(("note-edit-subj", &editing.id))),
+                        );
+
+                        ui.add_space(6.0);
+                        ui.horizontal(|ui| {
+                            ui.push_id(("note-save-btn", &editing.id), |ui| {
+                                if ui.button("Save").clicked() {
+                                    // Clone, do not take: the buffer must
+                                    // survive until `update_note` succeeds.
+                                    pending_edit = Some((
+                                        editing.id.clone(),
+                                        editing.accomplishment.clone(),
+                                        editing.subject.clone(),
+                                    ));
+                                }
+                            });
+                            ui.push_id(("note-cancel-btn", &editing.id), |ui| {
+                                if ui.button("Cancel").clicked() {
+                                    cancel_edit = true;
+                                }
+                            });
+                        });
+                    } else {
+                        ui.horizontal(|ui| {
+                            if let Some(subject) = row
+                                .subject
+                                .as_deref()
+                                .filter(|s| !s.trim().is_empty())
+                            {
+                                ui.label(
+                                    egui::RichText::new(subject)
+                                        .size(11.0)
+                                        .strong()
+                                        .color(Color32::from_rgb(166, 227, 161)),
+                                );
+                            }
+                            ui.with_layout(
+                                egui::Layout::right_to_left(egui::Align::Center),
+                                |ui| {
+                                    ui.push_id(("note-delete-btn", &row.id), |ui| {
+                                        if ui.button("Delete").clicked() {
+                                            pending_delete = Some(row.id.clone());
+                                        }
+                                    });
+                                    ui.push_id(("note-edit-btn", &row.id), |ui| {
+                                        if ui.button("Edit").clicked() {
+                                            // Only transition into editing if
+                                            // we are not already editing this
+                                            // note. Protects against egui
+                                            // firing `clicked` more than once
+                                            // on a frame where the layout
+                                            // shifts.
+                                            let already_editing = self
+                                                .editing_note
+                                                .as_ref()
+                                                .is_some_and(|e| e.id == row.id);
+                                            if !already_editing {
+                                                self.editing_note = Some(EditingNote {
+                                                    id: row.id.clone(),
+                                                    accomplishment: row.accomplishment.clone(),
+                                                    subject: row
+                                                        .subject
+                                                        .clone()
+                                                        .unwrap_or_default(),
+                                                });
+                                            }
+                                        }
+                                    });
+                                },
+                            );
+                        });
+                        ui.label(
+                            egui::RichText::new(&row.accomplishment).color(theme::TEXT),
+                        );
+                        if row.duration_seconds > 0 {
+                            ui.label(
+                                egui::RichText::new(format!(
+                                    "{} · {}",
+                                    readable_duration(row.duration_seconds),
+                                    if row.updated_at.is_some() {
+                                        "edited"
+                                    } else {
+                                        "logged"
+                                    }
+                                ))
+                                .size(11.0)
+                                .color(theme::MUTED),
+                            );
+                        }
+                    }
+                });
+            ui.add_space(6.0);
+        }
+
+        if cancel_edit {
+            self.editing_note = None;
+        }
+
+        if let Some((id, accomplishment, subject)) = pending_edit {
+            let subject_opt = if subject.trim().is_empty() {
+                None
+            } else {
+                Some(subject)
+            };
+            match state.update_note(&id, accomplishment, subject_opt) {
+                Ok(()) => {
+                    self.editing_note = None;
+                    state.error_message = None;
+                }
+                Err(error) => state.error_message = Some(error),
+            }
+        }
+
+        if let Some(id) = pending_delete {
+            match state.delete_note(&id) {
+                Ok(()) => state.error_message = None,
+                Err(error) => state.error_message = Some(error),
+            }
+        }
+    }
+
     fn show_note_popup(&mut self, ctx: &egui::Context, state: &mut AppState) {
         if state.pending_note_duration.is_none() {
             return;
@@ -423,18 +644,28 @@ impl PomodoroApp {
                 );
                 ui.add_space(8.0);
                 ui.label("Accomplishment");
-                ui.text_edit_singleline(&mut self.note_text);
+                ui.add(
+                    egui::TextEdit::singleline(&mut self.note_text)
+                        .id(egui::Id::new("popup-acc")),
+                );
                 ui.add_space(4.0);
                 ui.label("Subject tag (optional)");
-                ui.text_edit_singleline(&mut self.subject_text);
+                ui.add(
+                    egui::TextEdit::singleline(&mut self.subject_text)
+                        .id(egui::Id::new("popup-subj")),
+                );
                 ui.add_space(12.0);
                 ui.horizontal(|ui| {
                     if ui.button("Save note").clicked() {
                         match state.save_note(
-                            std::mem::take(&mut self.note_text),
-                            Some(std::mem::take(&mut self.subject_text)),
+                            self.note_text.clone(),
+                            Some(self.subject_text.clone()),
                         ) {
-                            Ok(()) => state.error_message = None,
+                            Ok(_) => {
+                                self.note_text.clear();
+                                self.subject_text.clear();
+                                state.error_message = None;
+                            }
                             Err(error) => state.error_message = Some(error),
                         }
                     }
