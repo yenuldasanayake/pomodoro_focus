@@ -70,7 +70,6 @@ impl eframe::App for PomodoroApp {
             ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(!is_fullscreen));
         }
 
-        // Keyboard shortcuts, skipped while a text field has focus.
         let text_editing = ctx.memory(|memory| memory.focused().is_some());
         if !text_editing {
             if ctx.input(|input| input.key_pressed(Key::Space)) {
@@ -108,34 +107,39 @@ impl eframe::App for PomodoroApp {
             ctx.request_repaint_after(Duration::from_millis(160));
         }
 
-        egui::CentralPanel::default()
+      egui::CentralPanel::default()
             .frame(egui::Frame::new().fill(theme::BACKGROUND))
             .show(root_ui, |ui| {
-                egui::ScrollArea::vertical()
-                    .auto_shrink([false, false])
+                // Outer padding frame with correct integer margins
+                egui::Frame::new()
+                    .inner_margin(egui::Margin::symmetric(28, 24))
                     .show(ui, |ui| {
-                        self.show_top(ui, &state);
-                        ui.add_space(14.0);
-                        ui.vertical_centered(|ui| {
-                            self.show_timer(ui, &state, accent);
-                            ui.add_space(12.0);
-                            self.show_controls(ui, &mut state, accent);
-                            ui.add_space(8.0);
-                            ui.label(
-                                egui::RichText::new(
-                                    "Space · start/pause   ·   R · reset   ·   S · skip",
-                                )
-                                .size(11.0)
-                                .color(theme::MUTED),
-                            );
-                        });
-                        ui.add_space(24.0);
-                        self.show_connection(ui, &mut state);
-                        ui.add_space(8.0);
-                        self.show_settings(ui, &mut state);
-                        charts::show(ui, &state.history, &state.notes);
-                        ui.add_space(14.0);
-                        self.show_notes_section(ui, &mut state);
+                        egui::ScrollArea::vertical()
+                            .auto_shrink([false, false])
+                            .show(ui, |ui| {
+                                self.show_top(ui, &state);
+                                ui.add_space(14.0);
+                                ui.vertical_centered(|ui| {
+                                    self.show_timer(ui, &state, accent);
+                                    ui.add_space(12.0);
+                                    self.show_controls(ui, &mut state, accent);
+                                    ui.add_space(8.0);
+                                    ui.label(
+                                        egui::RichText::new(
+                                            "Space · start/pause   ·   R · reset   ·   S · skip",
+                                        )
+                                        .size(11.0)
+                                        .color(theme::MUTED),
+                                    );
+                                });
+                                ui.add_space(24.0);
+                                self.show_connection(ui, &mut state);
+                                ui.add_space(8.0);
+                                self.show_settings(ui, &mut state);
+                                charts::show(ui, &state.history, &state.notes);
+                                ui.add_space(14.0);
+                                self.show_notes_section(ui, &mut state);
+                            });
                     });
             });
 
@@ -147,7 +151,7 @@ impl eframe::App for PomodoroApp {
                 .show(&ctx, |ui| {
                     egui::Frame::new()
                         .fill(Color32::from_rgb(69, 35, 49))
-                        .corner_radius(12)
+                        .corner_radius(16.0)
                         .inner_margin(12)
                         .show(ui, |ui| {
                             ui.label(egui::RichText::new(message).color(theme::TEXT));
@@ -178,7 +182,7 @@ impl eframe::App for PomodoroApp {
 impl PomodoroApp {
     fn show_top(&self, ui: &mut egui::Ui, state: &AppState) {
         ui.horizontal(|ui| {
-            ui.add_space(24.0);
+            ui.add_space(4.0);
             ui.label(
                 egui::RichText::new("◉  POMODORO FOCUS")
                     .size(15.0)
@@ -195,7 +199,7 @@ impl PomodoroApp {
                     .strong()
                     .color(theme::MUTED),
                 );
-                ui.add_space(24.0);
+                ui.add_space(4.0);
             });
         });
         ui.add_space(12.0);
@@ -211,7 +215,7 @@ impl PomodoroApp {
         painter.circle_stroke(
             center,
             radius,
-            Stroke::new(5.0, Color32::from_rgb(49, 50, 68)),
+            Stroke::new(6.0, Color32::from_rgb(60, 64, 67)),
         );
 
         let progress = state.timer.progress(&state.settings);
@@ -222,7 +226,7 @@ impl PomodoroApp {
                 let angle = -std::f32::consts::FRAC_PI_2
                     + std::f32::consts::TAU * progress * step as f32 / steps as f32;
                 let point = ring_point(center, radius, angle);
-                painter.line_segment([previous, point], Stroke::new(5.0, accent));
+                painter.line_segment([previous, point], Stroke::new(6.0, accent));
                 previous = point;
             }
         }
@@ -253,12 +257,12 @@ impl PomodoroApp {
             FontId::proportional(14.0),
             theme::MUTED,
         );
-        painter.circle_filled(center + Vec2::new(0.0, 116.0), 3.0, accent);
+        painter.circle_filled(center + Vec2::new(0.0, 116.0), 3.5, accent);
     }
 
     fn show_controls(&self, ui: &mut egui::Ui, state: &mut AppState, accent: Color32) {
         ui.horizontal(|ui| {
-            if action_button(ui, "Skip", Color32::from_rgb(49, 50, 68), theme::TEXT, 76.0)
+            if action_button(ui, "Skip", Color32::from_rgb(60, 64, 67), theme::TEXT, 76.0)
                 .clicked()
                 && let Err(error) = state.execute_command("skip")
             {
@@ -270,7 +274,7 @@ impl PomodoroApp {
             } else {
                 "Start focus"
             };
-            if action_button(ui, label, accent, Color32::from_rgb(24, 24, 37), 176.0).clicked() {
+            if action_button(ui, label, accent, Color32::from_rgb(32, 33, 36), 176.0).clicked() {
                 let command = if state.timer.running {
                     "pause"
                 } else {
@@ -281,7 +285,7 @@ impl PomodoroApp {
                 }
             }
             ui.add_space(12.0);
-            if action_button(ui, "Reset", Color32::from_rgb(49, 50, 68), theme::TEXT, 76.0)
+            if action_button(ui, "Reset", Color32::from_rgb(60, 64, 67), theme::TEXT, 76.0)
                 .clicked()
                 && let Err(error) = state.execute_command("reset")
             {
@@ -294,7 +298,7 @@ impl PomodoroApp {
         ui.add_space(12.0);
         egui::Frame::new()
             .fill(theme::PANEL)
-            .corner_radius(16)
+            .corner_radius(16.0)
             .inner_margin(egui::Margin::symmetric(20, 14))
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
@@ -474,13 +478,10 @@ impl PomodoroApp {
 
             egui::Frame::new()
                 .fill(theme::PANEL)
-                .corner_radius(12)
+                .corner_radius(16.0)
                 .inner_margin(egui::Margin::symmetric(14, 10))
                 .show(ui, |ui| {
                     if editing_this {
-                        // Mutable borrow of the edit buffer. Its fields must
-                        // only be touched by the TextEdit widgets and by
-                        // Save/Cancel — never re-initialized from `row`.
                         let editing = self.editing_note.as_mut().unwrap();
 
                         ui.label(
@@ -515,8 +516,6 @@ impl PomodoroApp {
                         ui.horizontal(|ui| {
                             ui.push_id(("note-save-btn", &editing.id), |ui| {
                                 if ui.button("Save").clicked() {
-                                    // Clone, do not take: the buffer must
-                                    // survive until `update_note` succeeds.
                                     pending_edit = Some((
                                         editing.id.clone(),
                                         editing.accomplishment.clone(),
@@ -541,7 +540,7 @@ impl PomodoroApp {
                                     egui::RichText::new(subject)
                                         .size(11.0)
                                         .strong()
-                                        .color(Color32::from_rgb(166, 227, 161)),
+                                        .color(Color32::from_rgb(129, 201, 149)),
                                 );
                             }
                             ui.with_layout(
@@ -554,12 +553,6 @@ impl PomodoroApp {
                                     });
                                     ui.push_id(("note-edit-btn", &row.id), |ui| {
                                         if ui.button("Edit").clicked() {
-                                            // Only transition into editing if
-                                            // we are not already editing this
-                                            // note. Protects against egui
-                                            // firing `clicked` more than once
-                                            // on a frame where the layout
-                                            // shifts.
                                             let already_editing = self
                                                 .editing_note
                                                 .as_ref()
@@ -710,7 +703,7 @@ fn action_button(
     ui.add(
         egui::Button::new(egui::RichText::new(label).strong().color(text))
             .fill(fill)
-            .corner_radius(14)
+            .corner_radius(20.0)
             .min_size(Vec2::new(width, 48.0)),
     )
 }
@@ -742,7 +735,7 @@ fn readable_duration(seconds: u64) -> String {
 pub fn native_options() -> eframe::NativeOptions {
     eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_fullscreen(true)
+            .with_inner_size([900.0, 700.0])
             .with_title("Pomodoro Focus"),
         ..Default::default()
     }
