@@ -4,5 +4,6 @@
   "long_break_minutes": 15,
   "sessions_before_long_break": 4,
   "escape_exits_fullscreen": true,
-  "block_alt_tab": true
+  "block_alt_tab": true,
+  "sites_blocked": true
 }

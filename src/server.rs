@@ -1,6 +1,6 @@
 use crate::{
     alt_tab, audio, site_blocker,
-    storage::{BlockingSettings, History, Notes, Settings, Storage, StudyNote},
+    storage::{History, Notes, Settings, Storage, StudyNote},
     timer::{Mode, Timer},
 };
 use axum::{
@@ -22,6 +22,8 @@ use tokio::net::TcpListener;
 
 pub type SharedState = Arc<Mutex<AppState>>;
 
+const HISTORY_FLUSH_INTERVAL: Duration = Duration::from_secs(10);
+
 pub struct AppState {
     pub settings: Settings,
     pub history: History,
@@ -40,16 +42,37 @@ pub struct AppState {
     auth_failures: u32,
     auth_window_started: Instant,
     auth_locked_until: Option<Instant>,
-    storage: Storage,
+    pub storage: Storage,
+    history_dirty: bool,
+    last_history_flush: Instant,
 }
 
 impl AppState {
     pub fn new(ctx: egui::Context, storage: Storage, pin: String, local_url: String) -> Self {
-        let settings = load_with_warning(storage.load_settings(), "settings");
-        let history = load_with_warning(storage.load_history(), "history");
-        let notes = load_with_warning(storage.load_notes(), "notes");
-        let blocking = load_with_warning(storage.load_blocking_settings(), "blocking");
+        let mut warnings: Vec<String> = Vec::new();
+        let mut settings = load_with_warning(storage.load_settings(), "settings", &mut warnings);
+        let history = load_with_warning(storage.load_history(), "history", &mut warnings);
+        let notes = load_with_warning(storage.load_notes(), "notes", &mut warnings);
+
+        // One-shot migration from the old data/blocking.json file. If it exists
+        // and contains sites_blocked: true, carry the value into settings.json
+        // and remove the legacy file. Safe to run repeatedly; does nothing once
+        // the file is gone.
+        if let Some(legacy) = read_legacy_blocking() {
+            if legacy && !settings.sites_blocked {
+                settings.sites_blocked = legacy;
+                if let Err(error) = storage.save_settings(&settings) {
+                    eprintln!("Could not migrate legacy blocking.json: {error}");
+                }
+            }
+            let path = std::path::Path::new("data").join("blocking.json");
+            if let Err(error) = std::fs::remove_file(&path) {
+                eprintln!("Could not remove legacy {}: {error}", path.display());
+            }
+        }
+
         let timer = Timer::new(&settings);
+
         let (alt_tab_block_active, alt_tab_error) = if settings.block_alt_tab {
             match alt_tab::set_blocked(true) {
                 Ok(()) => (true, None),
@@ -58,53 +81,93 @@ impl AppState {
         } else {
             (false, None)
         };
-        let mut block_error = None;
-        let hosts_block_active = match site_blocker::set_blocked(blocking.sites_blocked) {
-            Ok(()) => blocking.sites_blocked,
+
+        let hosts_block_active = match site_blocker::set_blocked(settings.sites_blocked) {
+            Ok(()) => settings.sites_blocked,
             Err(error) => {
-                block_error = Some(format!(
-                    "Could not synchronize the Windows hosts block: {error}. Run the app as Administrator."
+                warnings.push(format!(
+                    "Could not synchronize the Windows hosts block: {error}. \
+                     Run the app as Administrator."
                 ));
                 false
             }
         };
+
+        let error_message = if warnings.is_empty() {
+            None
+        } else {
+            Some(warnings.join(" · "))
+        };
+
         Self {
+            sites_blocked: settings.sites_blocked,
+            hosts_block_active,
             settings,
             history,
             notes,
             timer,
             pin,
             local_url,
-            sites_blocked: blocking.sites_blocked,
-            hosts_block_active,
             alt_tab_block_active,
             alt_tab_error,
             server_error: None,
             pending_note_duration: None,
-            error_message: block_error,
+            error_message,
             ctx,
             auth_failures: 0,
             auth_window_started: Instant::now(),
             auth_locked_until: None,
             storage,
+            history_dirty: false,
+            last_history_flush: Instant::now(),
         }
     }
 
     pub fn tick(&mut self) {
         let completed = self.timer.update(&self.settings);
+
         let studied = self.timer.take_study_seconds();
         if studied > 0 {
             self.history.add_today(studied);
-            if let Err(error) = self.storage.save_history(&self.history) {
-                self.error_message = Some(format!("Could not save study history: {error}"));
-            }
+            self.history_dirty = true;
         }
+
+        if self.history_dirty && self.last_history_flush.elapsed() >= HISTORY_FLUSH_INTERVAL {
+            self.flush_history();
+        }
+
         if let Some(mode) = completed {
             audio::play_completion_beep();
             if mode == Mode::Study {
                 self.pending_note_duration = Some(u64::from(self.settings.study_minutes) * 60);
             }
+            self.flush_history();
             self.ctx.request_repaint();
+        }
+    }
+
+    pub fn flush_history(&mut self) {
+        if !self.history_dirty {
+            return;
+        }
+        match self.storage.save_history(&self.history) {
+            Ok(()) => {
+                self.history_dirty = false;
+                self.last_history_flush = Instant::now();
+            }
+            Err(error) => {
+                self.error_message = Some(format!("Could not save study history: {error}"));
+            }
+        }
+    }
+
+    pub fn flush_all(&mut self) {
+        self.flush_history();
+        if let Err(error) = self.storage.save_notes(&self.notes) {
+            eprintln!("Could not save notes on exit: {error}");
+        }
+        if let Err(error) = self.storage.save_settings(&self.settings) {
+            eprintln!("Could not save settings on exit: {error}");
         }
     }
 
@@ -126,6 +189,7 @@ impl AppState {
         self.tick();
         settings.sanitize();
         settings.block_alt_tab = self.settings.block_alt_tab;
+        settings.sites_blocked = self.settings.sites_blocked;
         self.storage
             .save_settings(&settings)
             .map_err(|error| format!("Could not save settings: {error}"))?;
@@ -154,7 +218,8 @@ impl AppState {
                 && let Err(rollback_error) = alt_tab::set_blocked(previous_active)
             {
                 let message = format!(
-                    "Could not save Alt+Tab setting: {error}; restoring the previous keyboard state also failed: {rollback_error}"
+                    "Could not save Alt+Tab setting: {error}; restoring the previous \
+                     keyboard state also failed: {rollback_error}"
                 );
                 self.alt_tab_error = Some(message.clone());
                 self.ctx.request_repaint();
@@ -203,39 +268,47 @@ impl AppState {
             return Ok(());
         }
         let old_hosts_state = self.hosts_block_active;
+
         let hosts_block_active = match site_blocker::set_blocked(blocked) {
             Ok(()) => blocked,
             Err(error) if blocked => {
                 self.error_message = Some(format!(
-                    "Browser extension blocking is enabled, but system-wide blocking failed: {error}. Run Pomodoro Focus as Administrator."
+                    "Browser extension blocking is enabled, but system-wide blocking \
+                     failed: {error}. Run Pomodoro Focus as Administrator."
                 ));
                 false
             }
             Err(error) => {
                 return Err(format!(
-                    "Could not disable system-wide blocking: {error}. Run Pomodoro Focus as Administrator."
+                    "Could not disable system-wide blocking: {error}. \
+                     Run Pomodoro Focus as Administrator."
                 ));
             }
         };
 
-        let settings = BlockingSettings {
-            sites_blocked: blocked,
-        };
-        if let Err(error) = self.storage.save_blocking_settings(&settings) {
+        let mut settings = self.settings.clone();
+        settings.sites_blocked = blocked;
+        if let Err(error) = self.storage.save_settings(&settings) {
             if hosts_block_active != old_hosts_state
                 && let Err(rollback_error) = site_blocker::set_blocked(old_hosts_state)
             {
                 return Err(format!(
-                    "Could not save blocking settings: {error}; reverting the hosts file also failed: {rollback_error}"
+                    "Could not save blocking settings: {error}; \
+                     reverting the hosts file also failed: {rollback_error}"
                 ));
             }
             return Err(format!("Could not save blocking settings: {error}"));
         }
+
+        self.settings = settings;
         self.sites_blocked = blocked;
         self.hosts_block_active = hosts_block_active;
+
         if blocked && !hosts_block_active {
             self.error_message.get_or_insert_with(|| {
-                "Browser extension blocking is enabled, but system-wide blocking needs Administrator access.".to_owned()
+                "Browser extension blocking is enabled, but system-wide blocking \
+                 needs Administrator access."
+                    .to_owned()
             });
         } else {
             self.error_message = None;
@@ -248,35 +321,57 @@ impl AppState {
         let studied = self.timer.take_study_seconds();
         if studied > 0 {
             self.history.add_today(studied);
-            if let Err(error) = self.storage.save_history(&self.history) {
-                self.error_message = Some(format!("Could not save study history: {error}"));
-            }
+            self.history_dirty = true;
+            self.flush_history();
         }
     }
 }
 
-fn load_with_warning<T>(result: std::io::Result<T>, name: &str) -> T
+fn load_with_warning<T>(
+    result: std::io::Result<T>,
+    name: &str,
+    warnings: &mut Vec<String>,
+) -> T
 where
     T: Default,
 {
     result.unwrap_or_else(|error| {
-        eprintln!("Could not load {name}: {error}; using defaults");
+        warnings.push(format!("Could not load {name}: {error}"));
         T::default()
     })
 }
 
+fn read_legacy_blocking() -> Option<bool> {
+    #[derive(Deserialize)]
+    struct Legacy {
+        #[serde(default)]
+        sites_blocked: bool,
+    }
+    let path = std::path::Path::new("data").join("blocking.json");
+    let bytes = std::fs::read(&path).ok()?;
+    serde_json::from_slice::<Legacy>(&bytes)
+        .ok()
+        .map(|legacy| legacy.sites_blocked)
+}
+
 pub fn generate_pin() -> Result<String, getrandom::Error> {
-    let mut bytes = [0_u8; 4];
+    let mut bytes = [0u8; 4];
     getrandom::fill(&mut bytes)?;
-    Ok(format!("{:08}", u32::from_ne_bytes(bytes) % 100_000_000))
+    // Avoid leading zeros so phone entry is unambiguous.
+    let value = 10_000_000 + (u32::from_ne_bytes(bytes) % 90_000_000);
+    Ok(value.to_string())
 }
 
 pub fn local_url() -> String {
+    local_url_for_port(5000)
+}
+
+pub fn local_url_for_port(port: u16) -> String {
     match local_ip_address::local_ip() {
-        Ok(ip) => format!("http://{ip}:5000"),
+        Ok(ip) => format!("http://{ip}:{port}"),
         Err(error) => {
             eprintln!("Could not determine the PC's local IP address: {error}");
-            "http://127.0.0.1:5000".to_owned()
+            format!("http://127.0.0.1:{port}")
         }
     }
 }
@@ -293,30 +388,47 @@ pub fn start_server(state: SharedState) {
                 return;
             }
         };
-        let listener = match runtime.block_on(TcpListener::bind("0.0.0.0:5000")) {
+
+        let listener = match runtime.block_on(TcpListener::bind("0.0.0.0:0")) {
             Ok(listener) => listener,
             Err(error) => {
                 report_server_error(
                     &state,
-                    format!("Could not bind phone server on port 5000: {error}"),
+                    format!("Could not bind phone server: {error}"),
                 );
                 return;
             }
         };
+
+        let port = match listener.local_addr() {
+            Ok(address) => address.port(),
+            Err(error) => {
+                report_server_error(
+                    &state,
+                    format!("Could not read phone server port: {error}"),
+                );
+                return;
+            }
+        };
+
+        if let Ok(mut state) = state.lock() {
+            state.local_url = local_url_for_port(port);
+            state.ctx.request_repaint();
+        }
+
         let router = Router::new()
             .route("/", get(mobile_page))
+            .route("/manifest.json", get(manifest))
+            .route("/icon.svg", get(icon))
             .route("/status", get(status))
             .route("/command", post(command))
             .route("/settings", post(update_settings))
             .route("/blocking", post(update_blocking))
             .route("/alt-tab", post(update_alt_tab))
+            .route("/notes", post(add_note))
             .with_state(state.clone());
-        match listener.local_addr() {
-            Ok(address) => eprintln!("Phone remote listening on {address}"),
-            Err(error) => {
-                eprintln!("Phone remote is listening, but its address could not be read: {error}")
-            }
-        }
+
+        eprintln!("Phone remote listening on 0.0.0.0:{port}");
         let result = runtime.block_on(async { axum::serve(listener, router).await });
         if let Err(error) = result {
             report_server_error(&state, format!("Phone server stopped: {error}"));
@@ -333,7 +445,29 @@ fn report_server_error(state: &SharedState, message: String) {
 }
 
 async fn mobile_page() -> Html<&'static str> {
-    Html(MOBILE_PAGE)
+    Html(include_str!("../web/index.html"))
+}
+
+async fn manifest() -> impl IntoResponse {
+    (
+        [(axum::http::header::CONTENT_TYPE, "application/manifest+json")],
+        include_str!("../web/manifest.json"),
+    )
+}
+
+async fn icon() -> impl IntoResponse {
+    (
+        [(axum::http::header::CONTENT_TYPE, "image/svg+xml")],
+        include_str!("../web/icon.svg"),
+    )
+}
+
+#[derive(Serialize)]
+struct NoteSummary {
+    timestamp: String,
+    duration_seconds: u64,
+    accomplishment: String,
+    subject: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -351,6 +485,9 @@ struct StatusResponse {
     hosts_block_active: bool,
     alt_tab_blocked: bool,
     alt_tab_error: Option<String>,
+    current_streak: u32,
+    completed_sessions: u32,
+    notes: Vec<NoteSummary>,
 }
 
 async fn status(State(shared): State<SharedState>) -> Result<Json<StatusResponse>, ApiError> {
@@ -358,6 +495,21 @@ async fn status(State(shared): State<SharedState>) -> Result<Json<StatusResponse
         .lock()
         .map_err(|_| ApiError::internal("App state is unavailable"))?;
     state.tick();
+
+    let notes: Vec<NoteSummary> = state
+        .notes
+        .entries
+        .iter()
+        .rev()
+        .take(20)
+        .map(|note| NoteSummary {
+            timestamp: note.timestamp.clone(),
+            duration_seconds: note.duration_seconds,
+            accomplishment: note.accomplishment.clone(),
+            subject: note.subject.clone(),
+        })
+        .collect();
+
     Ok(Json(StatusResponse {
         remaining_seconds: state.timer.remaining_seconds,
         mode: state.timer.mode,
@@ -372,6 +524,9 @@ async fn status(State(shared): State<SharedState>) -> Result<Json<StatusResponse
         hosts_block_active: state.hosts_block_active,
         alt_tab_blocked: state.alt_tab_block_active,
         alt_tab_error: state.alt_tab_error.clone(),
+        current_streak: state.history.current_streak(),
+        completed_sessions: state.timer.completed_study_sessions,
+        notes,
     }))
 }
 
@@ -423,6 +578,7 @@ async fn update_settings(
         sessions_before_long_break: request.sessions_before_long_break,
         escape_exits_fullscreen: request.escape_exits_fullscreen,
         block_alt_tab: state.settings.block_alt_tab,
+        sites_blocked: state.settings.sites_blocked,
     };
     state
         .update_settings(settings)
@@ -479,6 +635,36 @@ async fn update_blocking(
         None
     };
     Ok(Json(MessageResponse { ok: true, warning }))
+}
+
+#[derive(Deserialize)]
+struct NoteRequest {
+    token: String,
+    accomplishment: String,
+    #[serde(default)]
+    subject: String,
+}
+
+async fn add_note(
+    State(shared): State<SharedState>,
+    Json(request): Json<NoteRequest>,
+) -> Result<Json<MessageResponse>, ApiError> {
+    let mut state = shared
+        .lock()
+        .map_err(|_| ApiError::internal("App state is unavailable"))?;
+    verify_token(&mut state, &request.token)?;
+    let subject = if request.subject.trim().is_empty() {
+        None
+    } else {
+        Some(request.subject)
+    };
+    state
+        .save_note(request.accomplishment, subject)
+        .map_err(ApiError::bad_request)?;
+    Ok(Json(MessageResponse {
+        ok: true,
+        warning: None,
+    }))
 }
 
 fn verify_token(state: &mut AppState, token: &str) -> Result<(), ApiError> {
@@ -538,45 +724,3 @@ impl IntoResponse for ApiError {
         (self.0, Json(serde_json::json!({ "error": self.1 }))).into_response()
     }
 }
-
-const MOBILE_PAGE: &str = r###"<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<meta name="theme-color" content="#181825"><title>Pomodoro Focus</title>
-<style>
-:root{color-scheme:dark;--bg:#181825;--panel:#1e1e2e;--text:#e6e6ef;--muted:#9394a6;--accent:#f38ba8}
-*{box-sizing:border-box}body{margin:0;background:linear-gradient(155deg,#181825,#11111b);color:var(--text);font:16px system-ui,sans-serif;min-height:100vh}
-main{width:min(100% - 32px,460px);margin:0 auto;padding:34px 0 48px}.eyebrow{color:var(--muted);letter-spacing:.18em;font-size:.72rem;font-weight:700}
-h1{font-size:1.3rem;margin:5px 0 24px}.card{background:#1e1e2ee8;border:1px solid #313244;border-radius:22px;padding:26px;margin:16px 0}
-.timer{text-align:center}.mode{color:var(--accent);font-size:.76rem;letter-spacing:.2em;font-weight:700}.clock{font-size:clamp(4.8rem,24vw,7rem);font-weight:200;letter-spacing:-.08em;font-variant-numeric:tabular-nums;line-height:1.15}
-.today{color:var(--muted);font-size:.9rem}.buttons{display:flex;gap:10px;margin-top:22px}.buttons button{flex:1}.button{border:0;border-radius:14px;padding:13px 16px;background:#313244;color:var(--text);font-weight:650;font-size:.95rem}.button.primary{background:var(--accent);color:#181825}.button:active{transform:scale(.98)}
-label{display:block;color:var(--muted);font-size:.82rem;margin:13px 0 6px}input:not([type=checkbox]){width:100%;padding:12px;border:1px solid #45475a;border-radius:11px;background:#11111b;color:var(--text);font:inherit}.check-row{display:flex;align-items:center;gap:10px}.check-row input{width:18px;height:18px;accent-color:var(--accent)}
-.grid{display:grid;grid-template-columns:1fr 1fr;gap:4px 12px}.token{display:flex;gap:8px}.token input{flex:1}button{cursor:pointer}.message{min-height:20px;color:#a6e3a1;font-size:.84rem;margin-top:8px}
-</style></head>
-<body><main>
-<div class="eyebrow">POMODORO FOCUS</div><h1>Your focus, in sync.</h1>
-<section class="card timer"><div id="mode" class="mode">CONNECTING</div><div id="clock" class="clock">--:--</div><div id="today" class="today">Today · 0m</div>
-<div class="buttons"><button class="button primary" id="toggle">Start</button><button class="button" onclick="sendCommand('reset')">Reset</button><button class="button" onclick="sendCommand('skip')">Skip</button></div></section>
-<section class="card"><div class="eyebrow">STAY FOCUSED</div><p id="block-description" class="today">Block Instagram, YouTube, TikTok, and Facebook.</p><button id="block-toggle" class="button primary" style="width:100%" onclick="toggleBlocking()">Block distracting sites</button></section>
-<section class="card"><div class="eyebrow">REMOTE ACCESS</div><label for="pin">PIN shown on your PC</label><div class="token"><input id="pin" inputmode="numeric" maxlength="8" placeholder="8-digit PIN"></div>
-<div class="eyebrow" style="margin-top:24px">TIMER SETTINGS</div><div class="grid">
-<div><label>Focus · minutes</label><input id="study" type="number" min="1" max="180"></div><div><label>Short break · minutes</label><input id="short" type="number" min="1" max="60"></div>
-<div><label>Long break · minutes</label><input id="long" type="number" min="1" max="120"></div><div><label>Focus sessions</label><input id="sessions" type="number" min="1" max="12"></div></div>
-<label class="check-row"><input id="escape-enabled" type="checkbox"> Allow Esc to toggle fullscreen</label>
-<button class="button primary" style="width:100%;margin-top:16px" onclick="saveSettings()">Save settings</button><div id="message" class="message"></div></section>
-<section class="card"><div class="eyebrow">STAY ON TASK</div><p id="alt-tab-description" class="today">Block Alt+Tab, Win+Tab, and taskbar app switching while Pomodoro Focus is running.</p><button id="alt-tab-toggle" class="button primary" style="width:100%" onclick="toggleAltTab()">Disable app switching</button></section>
-</main><script>
-const colors={study:'#f38ba8',short_break:'#a6e3a1',long_break:'#89b4fa'};
-const field=id=>document.getElementById(id);
-function pin(){return document.querySelector('#pin').value.trim()}
-async function post(path,data){const response=await fetch(path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({...data,token:pin()})});const result=await response.json();if(!response.ok)throw Error(result.error||'Request failed');return result}
-async function sendCommand(command){try{await post('/command',{command});message('Command sent')}catch(error){message(error.message,true)}}
-async function toggleBlocking(){try{const blocked=document.querySelector('#block-toggle').dataset.blocked!=='true';const result=await post('/blocking',{blocked});message(result.warning|| (blocked?'Distracting sites blocked':'Sites unblocked'),Boolean(result.warning))}catch(error){message(error.message,true)}}
-async function toggleAltTab(){const button=document.querySelector('#alt-tab-toggle');try{const blocked=button.dataset.blocked!=='true';await post('/alt-tab',{blocked});message(blocked?'App switching disabled while Pomodoro Focus is running':'App switching enabled')}catch(error){message(error.message,true)}}
-function message(text,error=false){const el=document.querySelector('#message');el.textContent=text;el.style.color=error?'#f38ba8':'#a6e3a1'}
-async function saveSettings(){try{await post('/settings',{study_minutes:+field('study').value,short_break_minutes:+field('short').value,long_break_minutes:+field('long').value,sessions_before_long_break:+field('sessions').value,escape_exits_fullscreen:field('escape-enabled').checked});message('Settings saved')}catch(error){message(error.message,true)}}
-let loaded=false;
-async function refresh(){try{const s=await(await fetch('/status')).json();const mode=s.mode;document.documentElement.style.setProperty('--accent',colors[mode]||'#f38ba8');document.querySelector('#mode').textContent=mode.replace('_',' ').toUpperCase();document.querySelector('#clock').textContent=String(Math.floor(s.remaining_seconds/60)).padStart(2,'0')+':'+String(s.remaining_seconds%60).padStart(2,'0');document.querySelector('#today').textContent='Today · '+Math.floor(s.today_total_seconds/3600)+'h '+Math.floor(s.today_total_seconds%3600/60)+'m';document.querySelector('#toggle').textContent=s.running?'Pause':'Start';document.querySelector('#toggle').onclick=()=>sendCommand(s.running?'pause':'start');const blockButton=document.querySelector('#block-toggle');blockButton.dataset.blocked=String(s.sites_blocked);blockButton.textContent=s.sites_blocked?'Unblock distracting sites':'Block distracting sites';document.querySelector('#block-description').textContent=s.hosts_block_active?'Blocking is active across Windows and in the browser extension.':s.sites_blocked?'Browser extension blocking is on. Run the desktop app as Administrator for system-wide blocking.':'Block Instagram, YouTube, TikTok, and Facebook across Windows and supported browsers.';const altTabButton=document.querySelector('#alt-tab-toggle');altTabButton.dataset.blocked=String(s.alt_tab_blocked);altTabButton.textContent=s.alt_tab_blocked?'Enable app switching':'Disable app switching';document.querySelector('#alt-tab-description').textContent=s.alt_tab_error||'Block Alt+Tab, Win+Tab, and taskbar app switching while Pomodoro Focus is running.';if(!loaded){field('study').value=s.study_minutes;field('short').value=s.short_break_minutes;field('long').value=s.long_break_minutes;field('sessions').value=s.sessions_before_long_break;field('escape-enabled').checked=s.escape_exits_fullscreen;loaded=true}}catch(_){document.querySelector('#mode').textContent='PC NOT CONNECTED'}}
-refresh();setInterval(refresh,1000);
-</script></body></html>"###;

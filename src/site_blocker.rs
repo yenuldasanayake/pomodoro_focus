@@ -179,9 +179,7 @@ fn replace_contents(path: &Path, contents: &str) -> io::Result<()> {
 }
 
 #[cfg(windows)]
-#[cfg(windows)]
 const REPLACEFILE_WRITE_THROUGH: u32 = 0x1;
-
 #[cfg(windows)]
 #[link(name = "kernel32")]
 unsafe extern "system" {

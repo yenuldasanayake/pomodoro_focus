@@ -15,6 +15,7 @@ pub struct Settings {
     pub sessions_before_long_break: u32,
     pub escape_exits_fullscreen: bool,
     pub block_alt_tab: bool,
+    pub sites_blocked: bool,
 }
 
 impl Default for Settings {
@@ -26,6 +27,7 @@ impl Default for Settings {
             sessions_before_long_break: 4,
             escape_exits_fullscreen: false,
             block_alt_tab: false,
+            sites_blocked: false,
         }
     }
 }
@@ -52,6 +54,7 @@ mod settings_tests {
 
         assert!(!settings.escape_exits_fullscreen);
         assert!(!settings.block_alt_tab);
+        assert!(!settings.sites_blocked);
     }
 
     #[test]
@@ -66,15 +69,40 @@ mod settings_tests {
 
         assert!(loaded.block_alt_tab);
     }
+
+    #[test]
+    fn sites_blocked_setting_is_persisted() {
+        let settings = Settings {
+            sites_blocked: true,
+            ..Settings::default()
+        };
+
+        let saved = serde_json::to_string(&settings).unwrap();
+        let loaded: Settings = serde_json::from_str(&saved).unwrap();
+
+        assert!(loaded.sites_blocked);
+    }
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct History {
+    pub version: u32,
     pub daily_seconds: BTreeMap<String, u64>,
 }
 
+impl Default for History {
+    fn default() -> Self {
+        Self {
+            version: Self::CURRENT_VERSION,
+            daily_seconds: BTreeMap::new(),
+        }
+    }
+}
+
 impl History {
+    pub const CURRENT_VERSION: u32 = 1;
+
     pub fn today_seconds(&self) -> u64 {
         self.daily_seconds
             .get(&Local::now().date_naive().to_string())
@@ -133,12 +161,6 @@ pub struct Notes {
     pub entries: Vec<StudyNote>,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-#[serde(default)]
-pub struct BlockingSettings {
-    pub sites_blocked: bool,
-}
-
 #[derive(Debug, Clone)]
 pub struct Storage {
     root: PathBuf,
@@ -160,7 +182,12 @@ impl Storage {
     }
 
     pub fn load_history(&self) -> io::Result<History> {
-        self.load_or_default(Path::new("data").join("history.json"))
+        let mut history: History =
+            self.load_or_default(Path::new("data").join("history.json"))?;
+        if history.version == 0 {
+            history.version = History::CURRENT_VERSION;
+        }
+        Ok(history)
     }
 
     pub fn save_history(&self, history: &History) -> io::Result<()> {
@@ -173,14 +200,6 @@ impl Storage {
 
     pub fn save_notes(&self, notes: &Notes) -> io::Result<()> {
         self.save(Path::new("data").join("notes.json"), notes)
-    }
-
-    pub fn load_blocking_settings(&self) -> io::Result<BlockingSettings> {
-        self.load_or_default(Path::new("data").join("blocking.json"))
-    }
-
-    pub fn save_blocking_settings(&self, settings: &BlockingSettings) -> io::Result<()> {
-        self.save(Path::new("data").join("blocking.json"), settings)
     }
 
     fn load_or_default<T>(&self, relative: impl AsRef<Path>) -> io::Result<T>

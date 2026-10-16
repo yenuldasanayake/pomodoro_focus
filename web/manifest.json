@@ -1,0 +1,14 @@
+{
+  "name": "Pomodoro Focus",
+  "short_name": "Pomodoro",
+  "description": "Control your focus timer from your phone.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#181825",
+  "theme_color": "#181825",
+  "icons": [
+    { "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }
+  ]
+}

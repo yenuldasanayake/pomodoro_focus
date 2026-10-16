@@ -1,0 +1,408 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#181825">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<link rel="manifest" href="/manifest.json">
+<title>Pomodoro Focus</title>
+<style>
+:root{
+  color-scheme:dark;
+  --bg:#181825;--bg2:#11111b;--panel:#1e1e2e;--panel2:#252537;
+  --border:#313244;--text:#e6e6ef;--muted:#9394a6;
+  --accent:#f38ba8;--good:#a6e3a1;--warn:#fab387;
+  --radius:22px;
+}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{margin:0}
+body{
+  background:radial-gradient(1200px 600px at 50% -200px,color-mix(in srgb,var(--accent) 18%,transparent),transparent 70%),
+             linear-gradient(155deg,var(--bg),var(--bg2));
+  color:var(--text);
+  font:16px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;
+  min-height:100vh;
+  padding:env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+  transition:background .6s ease;
+}
+main{width:min(100% - 28px,480px);margin:0 auto;padding:28px 0 56px}
+.eyebrow{color:var(--muted);letter-spacing:.18em;font-size:.7rem;font-weight:700;text-transform:uppercase}
+h1{font-size:1.35rem;margin:6px 0 22px;font-weight:600;letter-spacing:-.01em}
+.card{
+  background:color-mix(in srgb,var(--panel) 92%,transparent);
+  border:1px solid var(--border);
+  border-radius:var(--radius);
+  padding:22px;
+  margin:14px 0;
+  backdrop-filter:blur(8px);
+  transition:border-color .3s ease;
+}
+.card.tight{padding:16px 18px}
+
+.timer{text-align:center;padding:30px 22px 24px}
+.mode{display:inline-flex;align-items:center;gap:8px;color:var(--accent);font-size:.72rem;letter-spacing:.2em;font-weight:700;transition:color .4s ease}
+.mode .dot{width:8px;height:8px;border-radius:50%;background:currentColor;box-shadow:0 0 0 0 currentColor;animation:pulse 2s infinite}
+@keyframes pulse{0%{box-shadow:0 0 0 0 color-mix(in srgb,currentColor 60%,transparent)}70%{box-shadow:0 0 0 10px transparent}100%{box-shadow:0 0 0 0 transparent}}
+.ring-wrap{position:relative;width:min(72vw,280px);aspect-ratio:1;margin:16px auto 6px}
+.ring-wrap svg{width:100%;height:100%;transform:rotate(-90deg)}
+.ring-track{fill:none;stroke:var(--border);stroke-width:6}
+.ring-fill{fill:none;stroke:var(--accent);stroke-width:6;stroke-linecap:round;transition:stroke-dashoffset .9s linear,stroke .4s ease}
+.clock{
+  position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
+  font-size:clamp(3.2rem,16vw,4.6rem);font-weight:200;letter-spacing:-.06em;
+  font-variant-numeric:tabular-nums;line-height:1;
+}
+.clock small{font-size:.5em;color:var(--muted);font-weight:400;letter-spacing:0;margin-left:6px}
+.today{color:var(--muted);font-size:.88rem;margin-top:4px}
+
+.buttons{display:flex;gap:10px;margin-top:20px}
+.buttons button{flex:1}
+.button{
+  border:0;border-radius:14px;padding:13px 16px;
+  background:var(--border);color:var(--text);
+  font-weight:650;font-size:.95rem;font-family:inherit;
+  cursor:pointer;transition:transform .08s ease,background .2s ease,opacity .2s ease;
+}
+.button.primary{background:var(--accent);color:#181825;transition:background .4s ease,transform .08s ease}
+.button.ghost{background:transparent;border:1px solid var(--border);color:var(--muted)}
+.button:active{transform:scale(.97)}
+.button:disabled{opacity:.45;cursor:not-allowed}
+.button.wide{width:100%}
+
+.stats{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:16px;padding-top:16px;border-top:1px solid var(--border)}
+.stat{text-align:center}
+.stat .v{font-size:1.15rem;font-weight:600;font-variant-numeric:tabular-nums}
+.stat .l{color:var(--muted);font-size:.68rem;letter-spacing:.12em;text-transform:uppercase;margin-top:2px}
+
+label{display:block;color:var(--muted);font-size:.8rem;margin:12px 0 6px;font-weight:500}
+input:not([type=checkbox]):not([type=range]){
+  width:100%;padding:12px 14px;border:1px solid var(--border);
+  border-radius:12px;background:var(--bg2);color:var(--text);
+  font:inherit;font-size:16px;transition:border-color .2s ease;
+}
+input:focus{outline:none;border-color:var(--accent)}
+.check-row{display:flex;align-items:center;gap:10px;margin:14px 0 0;cursor:pointer}
+.check-row input{width:18px;height:18px;accent-color:var(--accent);cursor:pointer}
+.check-row span{color:var(--muted);font-size:.85rem}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:4px 12px}
+.token{display:flex;gap:8px}
+.token input{flex:1}
+
+.notes-list{margin-top:12px;display:flex;flex-direction:column;gap:8px}
+.note{
+  background:var(--bg2);border:1px solid var(--border);border-radius:14px;
+  padding:12px 14px;display:flex;flex-direction:column;gap:4px;
+}
+.note .head{display:flex;justify-content:space-between;align-items:center;gap:8px}
+.note .subject{
+  display:inline-block;padding:2px 9px;border-radius:99px;
+  background:color-mix(in srgb,var(--good) 20%,transparent);
+  color:var(--good);font-size:.7rem;font-weight:600;letter-spacing:.04em;
+}
+.note .when{color:var(--muted);font-size:.72rem;font-variant-numeric:tabular-nums}
+.note .body{font-size:.9rem;line-height:1.4;word-break:break-word}
+.note .dur{color:var(--muted);font-size:.72rem}
+.empty{color:var(--muted);font-size:.85rem;text-align:center;padding:14px 0}
+
+.toasts{position:fixed;left:50%;bottom:calc(20px + env(safe-area-inset-bottom));transform:translateX(-50%);display:flex;flex-direction:column;gap:8px;z-index:50;pointer-events:none;width:min(100% - 32px,420px)}
+.toast{
+  background:var(--panel2);border:1px solid var(--border);border-left:3px solid var(--good);
+  border-radius:12px;padding:11px 14px;font-size:.88rem;
+  box-shadow:0 10px 30px rgba(0,0,0,.4);
+  animation:slideup .25s ease;pointer-events:auto;
+}
+.toast.error{border-left-color:var(--accent)}
+.toast.warn{border-left-color:var(--warn)}
+@keyframes slideup{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
+
+body.offline{filter:saturate(.4)}
+body.offline .mode .dot{animation:none;background:var(--muted)}
+body.flash::before{
+  content:"";position:fixed;inset:0;background:var(--accent);
+  opacity:.35;pointer-events:none;z-index:40;
+  animation:flash .8s ease forwards;
+}
+@keyframes flash{from{opacity:.35}to{opacity:0}}
+</style>
+</head>
+<body>
+<main>
+  <div class="eyebrow">Pomodoro Focus</div>
+  <h1>Your focus, in sync.</h1>
+
+  <section class="card timer">
+    <div class="mode"><span class="dot"></span><span id="mode">CONNECTING</span></div>
+    <div class="ring-wrap">
+      <svg viewBox="0 0 100 100" aria-hidden="true">
+        <circle class="ring-track" cx="50" cy="50" r="45"></circle>
+        <circle id="ring" class="ring-fill" cx="50" cy="50" r="45"
+                stroke-dasharray="282.74" stroke-dashoffset="0"></circle>
+      </svg>
+      <div class="clock" id="clock">--:--</div>
+    </div>
+    <div class="today" id="today">Today · 0m</div>
+
+    <div class="buttons">
+      <button class="button primary" id="toggle">Start</button>
+      <button class="button" onclick="sendCommand('reset')">Reset</button>
+      <button class="button" onclick="sendCommand('skip')">Skip</button>
+    </div>
+
+    <div class="stats">
+      <div class="stat"><div class="v" id="stat-today">—</div><div class="l">Today</div></div>
+      <div class="stat"><div class="v" id="stat-streak">—</div><div class="l">Streak</div></div>
+      <div class="stat"><div class="v" id="stat-sessions">—</div><div class="l">Sessions</div></div>
+    </div>
+  </section>
+
+  <section class="card">
+    <div class="eyebrow">Quick note</div>
+    <p class="today" style="margin-top:6px">Log what you finished. Subject is optional.</p>
+    <label for="note-body">Accomplishment</label>
+    <input id="note-body" placeholder="Finished chapter 4 of Rust book">
+    <label for="note-subject">Subject</label>
+    <input id="note-subject" placeholder="Rust">
+    <button class="button primary wide" style="margin-top:14px" onclick="saveNote()">Save note</button>
+  </section>
+
+  <section class="card">
+    <div class="eyebrow">Recent notes</div>
+    <div class="notes-list" id="notes-list"><div class="empty">No notes yet.</div></div>
+  </section>
+
+  <section class="card">
+    <div class="eyebrow">Stay focused</div>
+    <p id="block-description" class="today" style="margin-top:6px">Block Instagram, YouTube, TikTok, and Facebook.</p>
+    <button id="block-toggle" class="button primary wide" style="margin-top:14px" onclick="toggleBlocking()">Block distracting sites</button>
+  </section>
+
+  <section class="card">
+    <div class="eyebrow">Remote access</div>
+    <label for="pin">PIN shown on your PC</label>
+    <div class="token">
+      <input id="pin" inputmode="numeric" maxlength="8" placeholder="8-digit PIN" autocomplete="off">
+      <button class="button ghost" onclick="forgetPin()">Forget</button>
+    </div>
+
+    <div class="eyebrow" style="margin-top:22px">Timer settings</div>
+    <div class="grid">
+      <div><label>Focus · min</label><input id="study" type="number" min="1" max="180" inputmode="numeric"></div>
+      <div><label>Short break · min</label><input id="short" type="number" min="1" max="60" inputmode="numeric"></div>
+      <div><label>Long break · min</label><input id="long" type="number" min="1" max="120" inputmode="numeric"></div>
+      <div><label>Sessions</label><input id="sessions" type="number" min="1" max="12" inputmode="numeric"></div>
+    </div>
+    <label class="check-row"><input id="escape-enabled" type="checkbox"><span>Allow Esc to toggle fullscreen</span></label>
+    <button class="button primary wide" style="margin-top:14px" onclick="saveSettings()">Save settings</button>
+  </section>
+
+  <section class="card">
+    <div class="eyebrow">Stay on task</div>
+    <p id="alt-tab-description" class="today" style="margin-top:6px">Block Alt+Tab, Win+Tab, and taskbar app switching while Pomodoro Focus is running.</p>
+    <button id="alt-tab-toggle" class="button primary wide" style="margin-top:14px" onclick="toggleAltTab()">Disable app switching</button>
+  </section>
+</main>
+
+<div class="toasts" id="toasts"></div>
+
+<script>
+"use strict";
+const colors={study:"#f38ba8",short_break:"#a6e3a1",long_break:"#89b4fa"};
+const LABELS={study:"FOCUS SESSION",short_break:"SHORT BREAK",long_break:"LONG BREAK"};
+const $=id=>document.getElementById(id);
+const PIN_KEY="pomodoro-pin";
+
+let loaded=false;
+let lastMode=null;
+let lastRunning=null;
+let pollTimer=null;
+
+function pin(){return $("pin").value.trim()}
+function forgetPin(){localStorage.removeItem(PIN_KEY);$("pin").value="";toast("PIN forgotten")}
+(function hydratePin(){const s=localStorage.getItem(PIN_KEY);if(s)$("pin").value=s})();
+
+function toast(text,kind){
+  const el=document.createElement("div");
+  el.className="toast"+(kind?" "+kind:"");
+  el.textContent=text;
+  $("toasts").appendChild(el);
+  setTimeout(()=>{el.style.opacity="0";el.style.transition="opacity .3s";setTimeout(()=>el.remove(),300)},3200);
+}
+
+async function post(path,data){
+  const res=await fetch(path,{
+    method:"POST",
+    headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({...data,token:pin()})
+  });
+  const result=await res.json().catch(()=>({}));
+  if(!res.ok)throw new Error(result.error||("Request failed ("+res.status+")"));
+  if(!path.endsWith("/status"))localStorage.setItem(PIN_KEY,pin());
+  return result;
+}
+
+async function sendCommand(command){
+  try{await post("/command",{command});toast("Command sent")}
+  catch(e){toast(e.message,"error")}
+}
+async function toggleBlocking(){
+  const btn=$("block-toggle");
+  const blocked=btn.dataset.blocked!=="true";
+  try{
+    const r=await post("/blocking",{blocked});
+    toast(r.warning||(blocked?"Distracting sites blocked":"Sites unblocked"),r.warning?"warn":"");
+  }catch(e){toast(e.message,"error")}
+}
+async function toggleAltTab(){
+  const btn=$("alt-tab-toggle");
+  const blocked=btn.dataset.blocked!=="true";
+  try{
+    await post("/alt-tab",{blocked});
+    toast(blocked?"App switching disabled while running":"App switching enabled");
+  }catch(e){toast(e.message,"error")}
+}
+async function saveSettings(){
+  try{
+    await post("/settings",{
+      study_minutes:+$("study").value,
+      short_break_minutes:+$("short").value,
+      long_break_minutes:+$("long").value,
+      sessions_before_long_break:+$("sessions").value,
+      escape_exits_fullscreen:$("escape-enabled").checked
+    });
+    toast("Settings saved");
+  }catch(e){toast(e.message,"error")}
+}
+async function saveNote(){
+  const body=$("note-body").value.trim();
+  if(!body){toast("Write something first","warn");return}
+  try{
+    await post("/notes",{accomplishment:body,subject:$("note-subject").value.trim()});
+    $("note-body").value="";$("note-subject").value="";
+    toast("Note saved");
+    refresh();
+  }catch(e){toast(e.message,"error")}
+}
+
+function fmtClock(sec){
+  const m=Math.floor(sec/60),s=sec%60;
+  return String(m).padStart(2,"0")+":"+String(s).padStart(2,"0");
+}
+function fmtDuration(sec){
+  const h=Math.floor(sec/3600),m=Math.floor(sec%3600/60);
+  return h>0?h+"h "+String(m).padStart(2,"0")+"m":m+"m";
+}
+function relTime(iso){
+  const t=new Date(iso).getTime();
+  if(isNaN(t))return "";
+  const diff=Math.floor((Date.now()-t)/1000);
+  if(diff<60)return "just now";
+  if(diff<3600)return Math.floor(diff/60)+"m ago";
+  if(diff<86400)return Math.floor(diff/3600)+"h ago";
+  return Math.floor(diff/86400)+"d ago";
+}
+function escapeHtml(s){
+  return String(s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+}
+
+function renderNotes(notes){
+  const list=$("notes-list");
+  if(!notes||!notes.length){list.innerHTML='<div class="empty">No notes yet.</div>';return}
+  list.innerHTML=notes.slice().reverse().slice(0,8).map(n=>{
+    const subj=n.subject?'<span class="subject">'+escapeHtml(n.subject)+"</span>":"";
+    const dur=n.duration_seconds?'<span class="dur">'+fmtDuration(n.duration_seconds)+"</span>":"";
+    return '<div class="note"><div class="head">'+subj+'<span class="when">'+relTime(n.timestamp)+"</span></div>"+
+           '<div class="body">'+escapeHtml(n.accomplishment||"(no description)")+"</div>"+
+           (dur?'<div class="head">'+dur+"</div>":"")+
+           "</div>";
+  }).join("");
+}
+
+function applyMode(mode){
+  const accent=colors[mode]||colors.study;
+  document.documentElement.style.setProperty("--accent",accent);
+  document.querySelector('meta[name=theme-color]').setAttribute("content",accent);
+  $("mode").textContent=LABELS[mode]||mode.toUpperCase();
+}
+
+async function refresh(){
+  try{
+    const s=await(await fetch("/status")).json();
+
+    document.body.classList.remove("offline");
+
+    if(lastMode!==null && lastMode!==s.mode){
+      document.body.classList.add("flash");
+      setTimeout(()=>document.body.classList.remove("flash"),900);
+      if(navigator.vibrate)navigator.vibrate([80,40,80]);
+      renderNotes(s.notes||[]);
+    }
+    lastMode=s.mode;
+    applyMode(s.mode);
+
+    $("clock").textContent=fmtClock(s.remaining_seconds);
+    $("today").textContent="Today · "+fmtDuration(s.today_total_seconds);
+
+    const total=s.mode==="study"?s.study_minutes*60
+              :s.mode==="short_break"?s.short_break_minutes*60
+              :s.long_break_minutes*60;
+    const circumference=2*Math.PI*45;
+    const fraction=total>0?Math.min(1,Math.max(0,1-s.remaining_seconds/total)):0;
+    $("ring").style.strokeDashoffset=String(circumference*(1-fraction));
+
+    if(lastRunning!==s.running||$("toggle").textContent.trim()==="") {
+      $("toggle").textContent=s.running?"Pause":"Start focus";
+    }
+    lastRunning=s.running;
+    $("toggle").onclick=()=>sendCommand(s.running?"pause":"start");
+
+    $("stat-today").textContent=fmtDuration(s.today_total_seconds);
+    $("stat-streak").textContent=(s.current_streak||0)+"d";
+    $("stat-sessions").textContent=String(s.completed_sessions||0);
+
+    const b=$("block-toggle");
+    b.dataset.blocked=String(s.sites_blocked);
+    b.textContent=s.sites_blocked?"Unblock distracting sites":"Block distracting sites";
+    $("block-description").textContent=
+      s.hosts_block_active?"Blocking is active across Windows and in the browser extension.":
+      s.sites_blocked?"Browser extension blocking is on. Run the desktop app as Administrator for system-wide blocking.":
+      "Block Instagram, YouTube, TikTok, and Facebook across Windows and supported browsers.";
+
+    const a=$("alt-tab-toggle");
+    a.dataset.blocked=String(s.alt_tab_blocked);
+    a.textContent=s.alt_tab_blocked?"Enable app switching":"Disable app switching";
+    $("alt-tab-description").textContent=s.alt_tab_error||
+      "Block Alt+Tab, Win+Tab, and taskbar app switching while Pomodoro Focus is running.";
+
+    if(!loaded){
+      $("study").value=s.study_minutes;
+      $("short").value=s.short_break_minutes;
+      $("long").value=s.long_break_minutes;
+      $("sessions").value=s.sessions_before_long_break;
+      $("escape-enabled").checked=s.escape_exits_fullscreen;
+      loaded=true;
+    }
+
+    renderNotes(s.notes||[]);
+  }catch(_){
+    document.body.classList.add("offline");
+    $("mode").textContent="PC NOT CONNECTED";
+  }
+}
+
+function startPolling(){
+  if(pollTimer)clearInterval(pollTimer);
+  pollTimer=setInterval(refresh,1000);
+}
+
+document.addEventListener("visibilitychange",()=>{
+  if(document.hidden)clearInterval(pollTimer);
+  else{refresh();startPolling()}
+});
+
+refresh();
+startPolling();
+</script>
+</body>
+</html>

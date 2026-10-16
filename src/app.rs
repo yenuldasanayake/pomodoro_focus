@@ -1,5 +1,5 @@
 use crate::{
-    charts,
+    alt_tab, charts, site_blocker,
     server::{self, AppState, SharedState},
     storage::Storage,
     theme,
@@ -63,6 +63,28 @@ impl eframe::App for PomodoroApp {
             ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(!is_fullscreen));
         }
 
+        // Keyboard shortcuts, skipped while a text field has focus.
+        let text_editing = ctx.memory(|memory| memory.focused().is_some());
+        if !text_editing {
+            if ctx.input(|input| input.key_pressed(Key::Space)) {
+                let command = if state.timer.running { "pause" } else { "start" };
+                if let Err(error) = state.execute_command(command) {
+                    state.error_message = Some(error);
+                }
+            }
+            let plain = |m: &egui::Modifiers| !m.ctrl && !m.command && !m.alt && !m.shift;
+            if ctx.input(|input| input.key_pressed(Key::R) && plain(&input.modifiers))
+                && let Err(error) = state.execute_command("reset")
+            {
+                state.error_message = Some(error);
+            }
+            if ctx.input(|input| input.key_pressed(Key::S) && plain(&input.modifiers))
+                && let Err(error) = state.execute_command("skip")
+            {
+                state.error_message = Some(error);
+            }
+        }
+
         state.tick();
         if state.timer.mode != self.previous_mode {
             self.transition_from = theme::accent(self.previous_mode);
@@ -91,6 +113,14 @@ impl eframe::App for PomodoroApp {
                             self.show_timer(ui, &state, accent);
                             ui.add_space(12.0);
                             self.show_controls(ui, &mut state, accent);
+                            ui.add_space(8.0);
+                            ui.label(
+                                egui::RichText::new(
+                                    "Space · start/pause   ·   R · reset   ·   S · skip",
+                                )
+                                .size(11.0)
+                                .color(theme::MUTED),
+                            );
                         });
                         ui.add_space(24.0);
                         self.show_connection(ui, &mut state);
@@ -101,6 +131,7 @@ impl eframe::App for PomodoroApp {
             });
 
         self.show_note_popup(&ctx, &mut state);
+
         if let Some(message) = &state.server_error {
             egui::Area::new(Id::new("server-error"))
                 .anchor(Align2::RIGHT_TOP, Vec2::new(-24.0, 24.0))
@@ -118,10 +149,21 @@ impl eframe::App for PomodoroApp {
             egui::Area::new(Id::new("storage-error"))
                 .anchor(Align2::LEFT_BOTTOM, Vec2::new(24.0, -20.0))
                 .show(&ctx, |ui| {
-                    ui.label(egui::RichText::new(message).color(Color32::from_rgb(243, 139, 168)));
+                    ui.label(
+                        egui::RichText::new(message)
+                            .color(Color32::from_rgb(243, 139, 168)),
+                    );
                 });
         }
     }
+
+   fn on_exit(&mut self) {
+    if let Ok(mut state) = self.shared.lock() {
+        state.flush_all();
+        let _ = alt_tab::set_blocked(false);
+        let _ = site_blocker::set_blocked(false);
+    }
+}
 }
 
 impl PomodoroApp {
@@ -207,7 +249,8 @@ impl PomodoroApp {
 
     fn show_controls(&self, ui: &mut egui::Ui, state: &mut AppState, accent: Color32) {
         ui.horizontal(|ui| {
-            if action_button(ui, "Skip", Color32::from_rgb(49, 50, 68), theme::TEXT, 76.0).clicked()
+            if action_button(ui, "Skip", Color32::from_rgb(49, 50, 68), theme::TEXT, 76.0)
+                .clicked()
                 && let Err(error) = state.execute_command("skip")
             {
                 state.error_message = Some(error);
@@ -229,14 +272,8 @@ impl PomodoroApp {
                 }
             }
             ui.add_space(12.0);
-            if action_button(
-                ui,
-                "Reset",
-                Color32::from_rgb(49, 50, 68),
-                theme::TEXT,
-                76.0,
-            )
-            .clicked()
+            if action_button(ui, "Reset", Color32::from_rgb(49, 50, 68), theme::TEXT, 76.0)
+                .clicked()
                 && let Err(error) = state.execute_command("reset")
             {
                 state.error_message = Some(error);
@@ -345,7 +382,9 @@ impl PomodoroApp {
             .resizable(false)
             .anchor(Align2::CENTER_CENTER, Vec2::ZERO)
             .show(ctx, |ui| {
-                ui.label("A quick note makes it easier to see what your focus added up to.");
+                ui.label(
+                    "A quick note makes it easier to see what your focus added up to.",
+                );
                 ui.add_space(8.0);
                 ui.label("Accomplishment");
                 ui.text_edit_singleline(&mut self.note_text);
