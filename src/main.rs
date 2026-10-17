@@ -1,12 +1,5 @@
-mod alt_tab;
-mod app;
-mod audio;
-mod charts;
-mod server;
-mod site_blocker;
-mod storage;
-mod theme;
-mod timer;
+
+use pomodoro_focus::app;
 
 fn main() -> eframe::Result {
     eframe::run_native(
@@ -14,9 +7,7 @@ fn main() -> eframe::Result {
         app::native_options(),
         Box::new(|creation_context| {
             let app = app::create_app(creation_context).map_err(|error| {
-                std::io::Error::other(format!(
-                    "Could not start the app: {error}"
-                ))
+                std::io::Error::other(format!("Could not start the app: {error}"))
             })?;
             Ok(Box::new(app))
         }),

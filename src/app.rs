@@ -107,10 +107,9 @@ impl eframe::App for PomodoroApp {
             ctx.request_repaint_after(Duration::from_millis(160));
         }
 
-      egui::CentralPanel::default()
+        egui::CentralPanel::default()
             .frame(egui::Frame::new().fill(theme::BACKGROUND))
             .show(root_ui, |ui| {
-                // Outer padding frame with correct integer margins
                 egui::Frame::new()
                     .inner_margin(egui::Margin::symmetric(28, 24))
                     .show(ui, |ui| {
@@ -163,8 +162,7 @@ impl eframe::App for PomodoroApp {
                 .anchor(Align2::LEFT_BOTTOM, Vec2::new(24.0, -20.0))
                 .show(&ctx, |ui| {
                     ui.label(
-                        egui::RichText::new(message)
-                            .color(Color32::from_rgb(243, 139, 168)),
+                        egui::RichText::new(message).color(Color32::from_rgb(243, 139, 168)),
                     );
                 });
         }
@@ -250,10 +248,7 @@ impl PomodoroApp {
         painter.text(
             center + Vec2::new(0.0, 78.0),
             Align2::CENTER_CENTER,
-            format!(
-                "TODAY  {}",
-                readable_duration(state.history.today_seconds())
-            ),
+            format!("TODAY  {}", readable_duration(state.history.today_seconds())),
             FontId::proportional(14.0),
             theme::MUTED,
         );
@@ -269,17 +264,9 @@ impl PomodoroApp {
                 state.error_message = Some(error);
             }
             ui.add_space(12.0);
-            let label = if state.timer.running {
-                "Pause"
-            } else {
-                "Start focus"
-            };
+            let label = if state.timer.running { "Pause" } else { "Start focus" };
             if action_button(ui, label, accent, Color32::from_rgb(32, 33, 36), 176.0).clicked() {
-                let command = if state.timer.running {
-                    "pause"
-                } else {
-                    "start"
-                };
+                let command = if state.timer.running { "pause" } else { "start" };
                 if let Err(error) = state.execute_command(command) {
                     state.error_message = Some(error);
                 }
@@ -471,10 +458,7 @@ impl PomodoroApp {
         let mut cancel_edit = false;
 
         for row in &rows {
-            let editing_this = self
-                .editing_note
-                .as_ref()
-                .is_some_and(|e| e.id == row.id);
+            let editing_this = self.editing_note.as_ref().is_some_and(|e| e.id == row.id);
 
             egui::Frame::new()
                 .fill(theme::PANEL)
@@ -572,19 +556,13 @@ impl PomodoroApp {
                                 },
                             );
                         });
-                        ui.label(
-                            egui::RichText::new(&row.accomplishment).color(theme::TEXT),
-                        );
+                        ui.label(egui::RichText::new(&row.accomplishment).color(theme::TEXT));
                         if row.duration_seconds > 0 {
                             ui.label(
                                 egui::RichText::new(format!(
                                     "{} · {}",
                                     readable_duration(row.duration_seconds),
-                                    if row.updated_at.is_some() {
-                                        "edited"
-                                    } else {
-                                        "logged"
-                                    }
+                                    if row.updated_at.is_some() { "edited" } else { "logged" }
                                 ))
                                 .size(11.0)
                                 .color(theme::MUTED),
@@ -623,24 +601,19 @@ impl PomodoroApp {
     }
 
     fn show_note_popup(&mut self, ctx: &egui::Context, state: &mut AppState) {
-        if state.pending_note_duration.is_none() {
+        let Some(pending_duration) = state.pending_note_duration else {
             return;
-        }
+        };
         egui::Window::new("What did you accomplish?")
             .id(Id::new("study-note-popup"))
             .collapsible(false)
             .resizable(false)
             .anchor(Align2::CENTER_CENTER, Vec2::ZERO)
             .show(ctx, |ui| {
-                ui.label(
-                    "A quick note makes it easier to see what your focus added up to.",
-                );
+                ui.label("A quick note makes it easier to see what your focus added up to.");
                 ui.add_space(8.0);
                 ui.label("Accomplishment");
-                ui.add(
-                    egui::TextEdit::singleline(&mut self.note_text)
-                        .id(egui::Id::new("popup-acc")),
-                );
+                ui.add(egui::TextEdit::singleline(&mut self.note_text).id(egui::Id::new("popup-acc")));
                 ui.add_space(4.0);
                 ui.label("Subject tag (optional)");
                 ui.add(
@@ -653,10 +626,14 @@ impl PomodoroApp {
                         match state.save_note(
                             self.note_text.clone(),
                             Some(self.subject_text.clone()),
+                            pending_duration,
                         ) {
                             Ok(_) => {
                                 self.note_text.clear();
                                 self.subject_text.clear();
+                                // Only the desktop popup clears the pending
+                                // duration — the phone path uses 0 explicitly.
+                                state.pending_note_duration = None;
                                 state.error_message = None;
                             }
                             Err(error) => state.error_message = Some(error),

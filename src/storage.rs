@@ -296,6 +296,60 @@ mod notes_tests {
     }
 }
 
+#[cfg(test)]
+mod history_tests {
+    use super::*;
+    use chrono::Duration;
+
+    fn history_with_days(days: &[i64]) -> History {
+        let today = Local::now().date_naive();
+        let mut history = History::default();
+        for &offset in days {
+            let day = today + Duration::days(offset);
+            history.daily_seconds.insert(day.to_string(), 60);
+        }
+        history
+    }
+
+    #[test]
+    fn streak_zero_when_empty() {
+        assert_eq!(History::default().current_streak(), 0);
+    }
+
+    #[test]
+    fn streak_one_for_today_only() {
+        assert_eq!(history_with_days(&[0]).current_streak(), 1);
+    }
+
+    #[test]
+    fn streak_one_for_yesterday_only() {
+        assert_eq!(history_with_days(&[-1]).current_streak(), 1);
+    }
+
+    #[test]
+    fn streak_zero_for_gap_day_only() {
+        assert_eq!(history_with_days(&[-2]).current_streak(), 0);
+    }
+
+    #[test]
+    fn streak_two_for_today_and_yesterday() {
+        assert_eq!(history_with_days(&[0, -1]).current_streak(), 2);
+    }
+
+    #[test]
+    fn streak_stops_at_gap() {
+        assert_eq!(history_with_days(&[0, -1, -3]).current_streak(), 2);
+    }
+
+    #[test]
+    fn zero_seconds_does_not_count_as_study() {
+        let today = Local::now().date_naive();
+        let mut history = History::default();
+        history.daily_seconds.insert(today.to_string(), 0);
+        assert_eq!(history.current_streak(), 0);
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Storage {
     root: PathBuf,
@@ -310,8 +364,6 @@ impl Storage {
         &self.root
     }
 
-    /// Probe that the root directory is writable. Used at startup to warn the
-    /// user early instead of failing silently on the first note edit.
     pub fn check_writable(&self) -> io::Result<()> {
         fs::create_dir_all(&self.root)?;
         let probe = self.root.join(".pomodoro-write-probe");
@@ -329,9 +381,6 @@ impl Storage {
         Ok(())
     }
 
-    /// Diagnostic helper. Reports whether a specific data file can be written,
-    /// and if not, why. Called when a save fails so we can produce a useful
-    /// error message instead of a bare `os error 5`.
     fn diagnose_write_failure(&self, path: &Path, error: &io::Error) -> String {
         let parent = path.parent().unwrap_or(&self.root);
         if !parent.exists() {
@@ -412,10 +461,7 @@ impl Storage {
             Ok(bytes) => match serde_json::from_slice(&bytes) {
                 Ok(value) => Ok(value),
                 Err(error) => {
-                    eprintln!(
-                        "Could not parse {}: {error}; using defaults",
-                        path.display()
-                    );
+                    eprintln!("Could not parse {}: {error}; using defaults", path.display());
                     Ok(T::default())
                 }
             },
@@ -424,9 +470,6 @@ impl Storage {
         }
     }
 
-    /// Atomically write a JSON file. Writes to a sibling temp file first, then
-    /// renames over the target. This survives crashes mid-write and produces a
-    /// useful error if the destination is read-only or locked.
     fn save<T: Serialize>(&self, relative: impl AsRef<Path>, value: &T) -> io::Result<()> {
         let path = self.root.join(relative);
         if let Some(parent) = path.parent() {
@@ -440,8 +483,6 @@ impl Storage {
 
         let bytes = serde_json::to_vec_pretty(value).map_err(io::Error::other)?;
 
-        // Temp file lives next to the target so the rename is atomic on the
-        // same filesystem.
         let tmp = path.with_extension(format!(
             "tmp-{}-{}",
             std::process::id(),
@@ -456,8 +497,6 @@ impl Storage {
             ));
         }
 
-        // Sync before rename so a crash right after this point still leaves
-        // either the old or the new file fully intact.
         if let Ok(file) = fs::OpenOptions::new().write(true).open(&tmp) {
             let _ = file.sync_all();
         }
@@ -562,12 +601,7 @@ mod storage_tests {
         let leftovers: Vec<_> = fs::read_dir(&data_dir)
             .unwrap()
             .filter_map(Result::ok)
-            .filter(|entry| {
-                entry
-                    .file_name()
-                    .to_string_lossy()
-                    .contains("tmp")
-            })
+            .filter(|entry| entry.file_name().to_string_lossy().contains("tmp"))
             .collect();
         assert!(leftovers.is_empty(), "temp files leaked: {leftovers:?}");
 

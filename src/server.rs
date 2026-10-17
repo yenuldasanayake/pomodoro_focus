@@ -5,7 +5,7 @@ use crate::{
 };
 use axum::{
     Json, Router,
-    extract::State,
+    extract::{ConnectInfo, State},
     http::StatusCode,
     response::{Html, IntoResponse, Response},
     routing::{get, post},
@@ -14,6 +14,8 @@ use chrono::Local;
 use eframe::egui;
 use serde::{Deserialize, Serialize};
 use std::{
+    collections::HashMap,
+    net::{IpAddr, SocketAddr},
     sync::{Arc, Mutex},
     thread,
     time::{Duration, Instant},
@@ -23,6 +25,10 @@ use tokio::net::TcpListener;
 pub type SharedState = Arc<Mutex<AppState>>;
 
 const HISTORY_FLUSH_INTERVAL: Duration = Duration::from_secs(10);
+const AUTH_WINDOW: Duration = Duration::from_secs(60);
+const AUTH_LOCKOUT: Duration = Duration::from_secs(60);
+const AUTH_MAX_FAILURES: u32 = 5;
+const AUTH_RECORD_TTL: Duration = Duration::from_secs(300);
 
 pub struct AppState {
     pub settings: Settings,
@@ -41,20 +47,73 @@ pub struct AppState {
     pub pending_note_duration: Option<u64>,
     pub error_message: Option<String>,
     pub ctx: egui::Context,
-    auth_failures: u32,
-    auth_window_started: Instant,
-    auth_locked_until: Option<Instant>,
     pub storage: Storage,
+    auth: AuthState,
     history_dirty: bool,
     last_history_flush: Instant,
 }
+#[derive(Default)]
+struct AuthState {
+    failures: HashMap<IpAddr, FailureRecord>,
+}
+
+struct FailureRecord {
+    count: u32,
+    window_started: Instant,
+    locked_until: Option<Instant>,
+    last_seen: Instant,
+}
+
+impl AuthState {
+    fn prune(&mut self, now: Instant) {
+        self.failures
+            .retain(|_, record| now.duration_since(record.last_seen) < AUTH_RECORD_TTL);
+    }
+
+    fn record_success(&mut self, ip: IpAddr) {
+        self.failures.remove(&ip);
+    }
+
+    fn record_failure(&mut self, ip: IpAddr, now: Instant) -> bool {
+        self.prune(now);
+        let record = self.failures.entry(ip).or_insert_with(|| FailureRecord {
+            count: 0,
+            window_started: now,
+            locked_until: None,
+            last_seen: now,
+        });
+        if now.duration_since(record.window_started) >= AUTH_WINDOW {
+            record.count = 0;
+            record.window_started = now;
+            record.locked_until = None;
+        }
+        record.count += 1;
+        record.last_seen = now;
+        if record.count >= AUTH_MAX_FAILURES {
+            record.locked_until = Some(now + AUTH_LOCKOUT);
+            true
+        } else {
+            false
+        }
+    }
+}
+// Placeholder to keep the trait object above honest; never actually called.
+fn ip_to_pin_placeholder() -> &'static str {
+    "\0never-matches"
+}
+
+enum AuthError {
+    Locked,
+}
 
 impl AppState {
-    pub fn new(
-        ctx: egui::Context,
-        storage: Storage,
-    ) -> Result<Self, getrandom::Error> {
+    pub fn new(ctx: egui::Context, storage: Storage) -> Result<Self, getrandom::Error> {
         let mut warnings: Vec<String> = Vec::new();
+
+        if let Err(error) = storage.check_writable() {
+            warnings.push(error.to_string());
+        }
+
         let mut settings =
             load_with_warning(storage.load_settings(), "settings", &mut warnings);
         let history = load_with_warning(storage.load_history(), "history", &mut warnings);
@@ -129,10 +188,8 @@ impl AppState {
             pending_note_duration: None,
             error_message,
             ctx,
-            auth_failures: 0,
-            auth_window_started: Instant::now(),
-            auth_locked_until: None,
             storage,
+            auth: AuthState::default(),
             history_dirty: false,
             last_history_flush: Instant::now(),
         })
@@ -154,8 +211,7 @@ impl AppState {
         if let Some(mode) = completed {
             audio::play_completion_beep();
             if mode == Mode::Study {
-                self.pending_note_duration =
-                    Some(u64::from(self.settings.study_minutes) * 60);
+                self.pending_note_duration = Some(u64::from(self.settings.study_minutes) * 60);
             }
             self.flush_history();
             self.ctx.request_repaint();
@@ -256,10 +312,17 @@ impl AppState {
         Ok(())
     }
 
+    /// Save a note.
+    ///
+    /// `duration_seconds` is the study time the note should be attributed to.
+    /// The desktop popup passes the just-completed session's duration; the
+    /// phone always passes `0`. This lets both callers create notes at the
+    /// same time without racing over a single shared "pending duration".
     pub fn save_note(
         &mut self,
         accomplishment: String,
         subject: Option<String>,
+        duration_seconds: u64,
     ) -> Result<String, String> {
         let accomplishment = accomplishment.trim().to_owned();
         if accomplishment.is_empty() {
@@ -268,12 +331,11 @@ impl AppState {
         let subject = subject
             .map(|value| value.trim().to_owned())
             .filter(|value| !value.is_empty());
-        let duration = self.pending_note_duration.unwrap_or_default();
         let id = generate_id();
         self.notes.entries.push(StudyNote {
             id: id.clone(),
             timestamp: Local::now().to_rfc3339(),
-            duration_seconds: duration,
+            duration_seconds,
             accomplishment,
             subject,
             updated_at: None,
@@ -282,7 +344,6 @@ impl AppState {
             self.notes.entries.pop();
             return Err(format!("Could not save study note: {error}"));
         }
-        self.pending_note_duration = None;
         self.ctx.request_repaint();
         Ok(id)
     }
@@ -445,11 +506,7 @@ impl AppState {
     }
 }
 
-fn load_with_warning<T>(
-    result: std::io::Result<T>,
-    name: &str,
-    warnings: &mut Vec<String>,
-) -> T
+fn load_with_warning<T>(result: std::io::Result<T>, name: &str, warnings: &mut Vec<String>) -> T
 where
     T: Default,
 {
@@ -487,6 +544,22 @@ pub fn local_url_for_port(port: u16) -> String {
             format!("http://127.0.0.1:{port}")
         }
     }
+}
+
+pub fn build_router(state: SharedState) -> Router {
+    Router::new()
+        .route("/", get(mobile_page))
+        .route("/manifest.json", get(manifest))
+        .route("/icon.svg", get(icon))
+        .route("/status", get(status))
+        .route("/command", post(command))
+        .route("/settings", post(update_settings))
+        .route("/blocking", post(update_blocking))
+        .route("/alt-tab", post(update_alt_tab))
+        .route("/notes", post(add_note))
+        .route("/notes/update", post(update_note))
+        .route("/notes/delete", post(delete_note))
+        .with_state(state)
 }
 
 pub fn start_server(state: SharedState) {
@@ -556,22 +629,16 @@ pub fn start_server(state: SharedState) {
             state.ctx.request_repaint();
         }
 
-        let router = Router::new()
-            .route("/", get(mobile_page))
-            .route("/manifest.json", get(manifest))
-            .route("/icon.svg", get(icon))
-            .route("/status", get(status))
-            .route("/command", post(command))
-            .route("/settings", post(update_settings))
-            .route("/blocking", post(update_blocking))
-            .route("/alt-tab", post(update_alt_tab))
-            .route("/notes", post(add_note))
-            .route("/notes/update", post(update_note))
-            .route("/notes/delete", post(delete_note))
-            .with_state(state.clone());
+        let router = build_router(state.clone());
 
         eprintln!("Phone remote listening on 0.0.0.0:{port}");
-        let result = runtime.block_on(async { axum::serve(listener, router).await });
+        let result = runtime.block_on(async {
+            axum::serve(
+                listener,
+                router.into_make_service_with_connect_info::<SocketAddr>(),
+            )
+            .await
+        });
         if let Err(error) = result {
             report_server_error(&state, format!("Phone server stopped: {error}"));
         }
@@ -690,12 +757,13 @@ struct CommandRequest {
 
 async fn command(
     State(shared): State<SharedState>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
     Json(request): Json<CommandRequest>,
 ) -> Result<Json<MessageResponse>, ApiError> {
     let mut state = shared
         .lock()
         .map_err(|_| ApiError::internal("App state is unavailable"))?;
-    verify_token(&mut state, &request.token)?;
+    verify_token(&mut state, addr.ip(), &request.token)?;
     state
         .execute_command(&request.command)
         .map_err(ApiError::bad_request)?;
@@ -717,12 +785,13 @@ struct SettingsRequest {
 
 async fn update_settings(
     State(shared): State<SharedState>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
     Json(request): Json<SettingsRequest>,
 ) -> Result<Json<MessageResponse>, ApiError> {
     let mut state = shared
         .lock()
         .map_err(|_| ApiError::internal("App state is unavailable"))?;
-    verify_token(&mut state, &request.token)?;
+    verify_token(&mut state, addr.ip(), &request.token)?;
     let settings = Settings {
         study_minutes: request.study_minutes,
         short_break_minutes: request.short_break_minutes,
@@ -751,12 +820,13 @@ struct AltTabRequest {
 
 async fn update_alt_tab(
     State(shared): State<SharedState>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
     Json(request): Json<AltTabRequest>,
 ) -> Result<Json<MessageResponse>, ApiError> {
     let mut state = shared
         .lock()
         .map_err(|_| ApiError::internal("App state is unavailable"))?;
-    verify_token(&mut state, &request.token)?;
+    verify_token(&mut state, addr.ip(), &request.token)?;
     state
         .set_alt_tab_blocked(request.blocked)
         .map_err(ApiError::internal)?;
@@ -774,12 +844,13 @@ struct BlockingRequest {
 
 async fn update_blocking(
     State(shared): State<SharedState>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
     Json(request): Json<BlockingRequest>,
 ) -> Result<Json<MessageResponse>, ApiError> {
     let mut state = shared
         .lock()
         .map_err(|_| ApiError::internal("App state is unavailable"))?;
-    verify_token(&mut state, &request.token)?;
+    verify_token(&mut state, addr.ip(), &request.token)?;
     state
         .set_sites_blocked(request.blocked)
         .map_err(ApiError::internal)?;
@@ -801,19 +872,22 @@ struct NoteRequest {
 
 async fn add_note(
     State(shared): State<SharedState>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
     Json(request): Json<NoteRequest>,
 ) -> Result<Json<NoteCreatedResponse>, ApiError> {
     let mut state = shared
         .lock()
         .map_err(|_| ApiError::internal("App state is unavailable"))?;
-    verify_token(&mut state, &request.token)?;
+    verify_token(&mut state, addr.ip(), &request.token)?;
     let subject = if request.subject.trim().is_empty() {
         None
     } else {
         Some(request.subject)
     };
+    // Phone-created notes are not tied to a specific focus session, so
+    // they don't inherit `pending_note_duration`. Duration 0 is intentional.
     let id = state
-        .save_note(request.accomplishment, subject)
+        .save_note(request.accomplishment, subject, 0)
         .map_err(ApiError::bad_request)?;
     Ok(Json(NoteCreatedResponse { ok: true, id }))
 }
@@ -829,12 +903,13 @@ struct NoteUpdateRequest {
 
 async fn update_note(
     State(shared): State<SharedState>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
     Json(request): Json<NoteUpdateRequest>,
 ) -> Result<Json<MessageResponse>, ApiError> {
     let mut state = shared
         .lock()
         .map_err(|_| ApiError::internal("App state is unavailable"))?;
-    verify_token(&mut state, &request.token)?;
+    verify_token(&mut state, addr.ip(), &request.token)?;
     let subject = if request.subject.trim().is_empty() {
         None
     } else {
@@ -857,12 +932,13 @@ struct NoteDeleteRequest {
 
 async fn delete_note(
     State(shared): State<SharedState>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
     Json(request): Json<NoteDeleteRequest>,
 ) -> Result<Json<MessageResponse>, ApiError> {
     let mut state = shared
         .lock()
         .map_err(|_| ApiError::internal("App state is unavailable"))?;
-    verify_token(&mut state, &request.token)?;
+    verify_token(&mut state, addr.ip(), &request.token)?;
     state
         .delete_note(&request.id)
         .map_err(ApiError::bad_request)?;
@@ -872,27 +948,22 @@ async fn delete_note(
     }))
 }
 
-fn verify_token(state: &mut AppState, token: &str) -> Result<(), ApiError> {
+fn verify_token(state: &mut AppState, ip: IpAddr, token: &str) -> Result<(), ApiError> {
     let now = Instant::now();
-    if state.auth_locked_until.is_some_and(|until| now < until) {
-        return Err(ApiError::rate_limited(
-            "Too many incorrect PIN attempts. Try again in one minute.",
-        ));
+
+    if let Some(record) = state.auth.failures.get(&ip) {
+        if record.locked_until.is_some_and(|until| now < until) {
+            return Err(ApiError::rate_limited(
+                "Too many incorrect PIN attempts from this device. Try again in one minute.",
+            ));
+        }
     }
-    if now.duration_since(state.auth_window_started) >= Duration::from_secs(60) {
-        state.auth_window_started = now;
-        state.auth_failures = 0;
-        state.auth_locked_until = None;
-    }
+
     if state.pin == token {
-        state.auth_failures = 0;
-        state.auth_window_started = now;
+        state.auth.record_success(ip);
         Ok(())
     } else {
-        state.auth_failures += 1;
-        if state.auth_failures >= 5 {
-            state.auth_locked_until = Some(now + Duration::from_secs(60));
-        }
+        state.auth.record_failure(ip, now);
         Err(ApiError::unauthorized("Incorrect PIN"))
     }
 }
