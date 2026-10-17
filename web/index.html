@@ -62,6 +62,8 @@ h1{font-size:1.35rem;margin:6px 0 22px;font-weight:600;letter-spacing:-.01em}
   background:var(--border);color:var(--text);
   font-weight:650;font-size:.95rem;font-family:inherit;
   cursor:pointer;transition:transform .08s ease,background .2s ease,opacity .2s ease;
+  text-decoration:none;text-align:center;
+  display:inline-flex;align-items:center;justify-content:center;
 }
 .button.primary{background:var(--accent);color:#202124;transition:background .4s ease,transform .08s ease}
 .button.ghost{background:transparent;border:1px solid var(--border);color:var(--muted)}
@@ -192,6 +194,19 @@ body.flash::before{
   </section>
 
   <section class="card">
+    <div class="eyebrow">Export data</div>
+    <p class="today" style="margin-top:6px">
+      Download your history and notes. The PIN is sent as a query parameter, so links open directly in your browser.
+    </p>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:14px">
+      <a class="button ghost" id="export-history" target="_blank" rel="noopener">History CSV</a>
+      <a class="button ghost" id="export-notes" target="_blank" rel="noopener">Notes CSV</a>
+      <a class="button ghost" id="export-all-csv" target="_blank" rel="noopener">All CSV</a>
+      <a class="button primary" id="export-all-json" target="_blank" rel="noopener">All JSON</a>
+    </div>
+  </section>
+
+  <section class="card">
     <div class="eyebrow">Stay focused</div>
     <p id="block-description" class="today" style="margin-top:6px">Block Instagram, YouTube, TikTok, and Facebook.</p>
     <button id="block-toggle" class="button primary wide" style="margin-top:14px" onclick="toggleBlocking()">Block distracting sites</button>
@@ -238,15 +253,9 @@ let lastMode=null;
 let lastRunning=null;
 let pollTimer=null;
 
-// Id of the note currently being edited, or null when not editing.
 let editingId=null;
-// Draft buffer for the note being edited. This is the source of truth
-// for the input fields, so re-renders can't clobber the user's typing.
 let editDraft={accomplishment:"",subject:""};
-// Signature of last rendered notes list, so we don't rebuild the DOM
-// on every poll.
 let lastNoteSignature="";
-// Cache of the notes we last rendered, used for Cancel/Edit.
 let lastNotes=[];
 
 function pin(){return $("pin").value.trim()}
@@ -337,7 +346,6 @@ async function updateNote(id){
     editingId=null;
     editDraft={accomplishment:"",subject:""};
     noteToast("Note updated");
-    // Force the next refresh to re-render with the new text.
     lastNoteSignature="";
     refresh();
   }catch(e){toast(e.message,"error")}
@@ -374,7 +382,6 @@ function cancelEdit(){
   renderNotes(lastNotes);
 }
 
-// Called on every keystroke in the edit form.
 function onEditAccInput(value){editDraft.accomplishment=value}
 function onEditSubjInput(value){editDraft.subject=value}
 
@@ -408,7 +415,6 @@ function renderNotes(notes){
     return;
   }
 
-  // Preserve caret position within the edit form on re-render.
   const active=document.activeElement;
   const activeId=active&&active.id?active.id:null;
   const selectionStart=
@@ -457,6 +463,15 @@ function renderNotes(notes){
       }
     }
   }
+}
+
+function updateExportLinks(){
+  const token=pin();
+  const qs=token?`?token=${encodeURIComponent(token)}`:"";
+  $("export-history").href=`/export/history.csv${qs}`;
+  $("export-notes").href=`/export/notes.csv${qs}`;
+  $("export-all-csv").href=`/export/all.csv${qs}`;
+  $("export-all-json").href=`/export/all.json${qs}`;
 }
 
 function applyMode(mode){
@@ -523,8 +538,6 @@ async function refresh(){
       loaded=true;
     }
 
-    // CRITICAL: do not rebuild the notes list while the user is editing.
-    // The DOM inputs hold the draft, and any re-render would clobber them.
     if(editingId===null){
       const signature=JSON.stringify(s.notes||[]);
       if(signature!==lastNoteSignature){
@@ -532,10 +545,10 @@ async function refresh(){
         renderNotes(s.notes||[]);
       }
     }else{
-      // Keep lastNotes fresh so Cancel/Edit see current data, but do
-      // NOT touch the DOM.
       lastNotes=s.notes||[];
     }
+
+    updateExportLinks();
   }catch(_){
     document.body.classList.add("offline");
     $("mode").textContent="PC NOT CONNECTED";
@@ -552,6 +565,7 @@ document.addEventListener("visibilitychange",()=>{
   else{refresh();startPolling()}
 });
 
+updateExportLinks();
 refresh();
 startPolling();
 </script>

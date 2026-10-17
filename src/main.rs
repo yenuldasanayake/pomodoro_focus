@@ -1,4 +1,3 @@
-
 use pomodoro_focus::app;
 
 fn main() -> eframe::Result {

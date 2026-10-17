@@ -1,5 +1,5 @@
 use crate::{
-    alt_tab, charts, site_blocker,
+    alt_tab, charts, export, site_blocker,
     server::{self, AppState, SharedState},
     storage::Storage,
     theme,
@@ -337,6 +337,22 @@ impl PomodoroApp {
                             Err(error) => state.error_message = Some(error),
                         }
                     }
+                    if ui.button("Export data…").clicked() {
+                        let root = std::path::Path::new(".");
+                        match export::write_to_disk(root, &state.history, &state.notes) {
+                            Ok(path) => {
+                                let display = path.display().to_string();
+                                ui.ctx().copy_text(display.clone());
+                                state.error_message = Some(format!(
+                                    "Exported to {display} (path copied to clipboard)"
+                                ));
+                            }
+                            Err(error) => {
+                                state.error_message =
+                                    Some(format!("Export failed: {error}"));
+                            }
+                        }
+                    }
                 });
 
                 if state.port_change_pending {
@@ -631,8 +647,6 @@ impl PomodoroApp {
                             Ok(_) => {
                                 self.note_text.clear();
                                 self.subject_text.clear();
-                                // Only the desktop popup clears the pending
-                                // duration — the phone path uses 0 explicitly.
                                 state.pending_note_duration = None;
                                 state.error_message = None;
                             }

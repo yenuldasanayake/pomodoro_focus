@@ -1,12 +1,12 @@
 use crate::{
-    alt_tab, audio, site_blocker,
+    alt_tab, audio, export, site_blocker,
     storage::{generate_id, History, Notes, Settings, Storage, StudyNote},
     timer::{Mode, Timer},
 };
 use axum::{
     Json, Router,
     extract::{ConnectInfo, State},
-    http::StatusCode,
+    http::{header, StatusCode},
     response::{Html, IntoResponse, Response},
     routing::{get, post},
 };
@@ -52,6 +52,7 @@ pub struct AppState {
     history_dirty: bool,
     last_history_flush: Instant,
 }
+
 #[derive(Default)]
 struct AuthState {
     failures: HashMap<IpAddr, FailureRecord>,
@@ -96,14 +97,6 @@ impl AuthState {
             false
         }
     }
-}
-// Placeholder to keep the trait object above honest; never actually called.
-fn ip_to_pin_placeholder() -> &'static str {
-    "\0never-matches"
-}
-
-enum AuthError {
-    Locked,
 }
 
 impl AppState {
@@ -312,12 +305,6 @@ impl AppState {
         Ok(())
     }
 
-    /// Save a note.
-    ///
-    /// `duration_seconds` is the study time the note should be attributed to.
-    /// The desktop popup passes the just-completed session's duration; the
-    /// phone always passes `0`. This lets both callers create notes at the
-    /// same time without racing over a single shared "pending duration".
     pub fn save_note(
         &mut self,
         accomplishment: String,
@@ -559,6 +546,10 @@ pub fn build_router(state: SharedState) -> Router {
         .route("/notes", post(add_note))
         .route("/notes/update", post(update_note))
         .route("/notes/delete", post(delete_note))
+        .route("/export/history.csv", get(export_history_csv))
+        .route("/export/notes.csv", get(export_notes_csv))
+        .route("/export/all.csv", get(export_all_csv))
+        .route("/export/all.json", get(export_all_json))
         .with_state(state)
 }
 
@@ -750,6 +741,107 @@ async fn status(State(shared): State<SharedState>) -> Result<Json<StatusResponse
 }
 
 #[derive(Deserialize)]
+struct TokenQuery {
+    token: String,
+}
+
+async fn export_history_csv(
+    State(shared): State<SharedState>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    axum::extract::Query(query): axum::extract::Query<TokenQuery>,
+) -> Result<impl IntoResponse, ApiError> {
+    let mut state = shared
+        .lock()
+        .map_err(|_| ApiError::internal("App state is unavailable"))?;
+    verify_token(&mut state, addr.ip(), &query.token)?;
+    state.tick();
+    let body = export::history_csv(&state.history);
+    Ok((
+        [(
+            header::CONTENT_TYPE,
+            "text/csv; charset=utf-8",
+        )],
+        [(
+            header::CONTENT_DISPOSITION,
+            "attachment; filename=\"history.csv\"",
+        )],
+        body,
+    ))
+}
+
+async fn export_notes_csv(
+    State(shared): State<SharedState>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    axum::extract::Query(query): axum::extract::Query<TokenQuery>,
+) -> Result<impl IntoResponse, ApiError> {
+    let mut state = shared
+        .lock()
+        .map_err(|_| ApiError::internal("App state is unavailable"))?;
+    verify_token(&mut state, addr.ip(), &query.token)?;
+    state.tick();
+    let body = export::notes_csv(&state.notes);
+    Ok((
+        [(
+            header::CONTENT_TYPE,
+            "text/csv; charset=utf-8",
+        )],
+        [(
+            header::CONTENT_DISPOSITION,
+            "attachment; filename=\"notes.csv\"",
+        )],
+        body,
+    ))
+}
+
+async fn export_all_csv(
+    State(shared): State<SharedState>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    axum::extract::Query(query): axum::extract::Query<TokenQuery>,
+) -> Result<impl IntoResponse, ApiError> {
+    let mut state = shared
+        .lock()
+        .map_err(|_| ApiError::internal("App state is unavailable"))?;
+    verify_token(&mut state, addr.ip(), &query.token)?;
+    state.tick();
+    let body = export::all_csv(&state.history, &state.notes);
+    Ok((
+        [(
+            header::CONTENT_TYPE,
+            "text/csv; charset=utf-8",
+        )],
+        [(
+            header::CONTENT_DISPOSITION,
+            "attachment; filename=\"all.csv\"",
+        )],
+        body,
+    ))
+}
+
+async fn export_all_json(
+    State(shared): State<SharedState>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    axum::extract::Query(query): axum::extract::Query<TokenQuery>,
+) -> Result<impl IntoResponse, ApiError> {
+    let mut state = shared
+        .lock()
+        .map_err(|_| ApiError::internal("App state is unavailable"))?;
+    verify_token(&mut state, addr.ip(), &query.token)?;
+    state.tick();
+    let body = export::all_json(&state.history, &state.notes);
+    Ok((
+        [(
+            header::CONTENT_TYPE,
+            "application/json; charset=utf-8",
+        )],
+        [(
+            header::CONTENT_DISPOSITION,
+            "attachment; filename=\"all.json\"",
+        )],
+        body,
+    ))
+}
+
+#[derive(Deserialize)]
 struct CommandRequest {
     token: String,
     command: String,
@@ -884,8 +976,6 @@ async fn add_note(
     } else {
         Some(request.subject)
     };
-    // Phone-created notes are not tied to a specific focus session, so
-    // they don't inherit `pending_note_duration`. Duration 0 is intentional.
     let id = state
         .save_note(request.accomplishment, subject, 0)
         .map_err(ApiError::bad_request)?;
