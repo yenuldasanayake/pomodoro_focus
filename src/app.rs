@@ -1,5 +1,5 @@
 use crate::{
-    alt_tab, breaks, charts, export, site_blocker, tray,
+    alt_tab, breaks, charts, export, import, site_blocker, tray,
     server::{self, AppState, PowerAction, SharedState},
     storage::Storage,
     theme,
@@ -22,6 +22,9 @@ pub struct PomodoroApp {
     undo_started: Option<Instant>,
     tray: Option<tray::TrayHandle>,
     quit_from_tray: bool,
+    import_path: String,
+    show_import_dialog: bool,
+    import_mode: import::Mode,
 }
 
 #[derive(Clone)]
@@ -65,6 +68,9 @@ impl PomodoroApp {
             undo_started: None,
             tray,
             quit_from_tray: false,
+            import_path: String::new(),
+            show_import_dialog: false,
+            import_mode: import::Mode::Merge,
         })
     }
 }
@@ -74,7 +80,6 @@ impl eframe::App for PomodoroApp {
         let ctx = root_ui.ctx().clone();
         theme::apply(&ctx);
 
-        // Tray events.
         if let Some(tray) = &self.tray {
             for event in tray.poll() {
                 match event {
@@ -100,7 +105,6 @@ impl eframe::App for PomodoroApp {
             }
         }
 
-        // Close handling.
         if ctx.input(|i| i.viewport().close_requested()) && !self.quit_from_tray {
             let mut minimize_instead = false;
             if let Ok(state) = self.shared.lock() {
@@ -226,6 +230,7 @@ impl eframe::App for PomodoroApp {
         self.show_note_popup(&ctx, &mut state);
         self.show_undo_toast(&ctx, &mut state);
         self.show_power_banner(&ctx, &mut state);
+        self.show_import_dialog(&ctx, &mut state);
 
         if let Some(message) = &state.server_error {
             egui::Area::new(Id::new("server-error"))
@@ -265,7 +270,7 @@ impl PomodoroApp {
         ui.horizontal(|ui| {
             ui.add_space(4.0);
             ui.label(
-                egui::RichText::new("POMODORO FOCUS BY YENUL")
+                egui::RichText::new("POMODORO FOCUS")
                     .size(15.0)
                     .strong()
                     .color(theme::TEXT),
@@ -415,7 +420,7 @@ impl PomodoroApp {
         });
     }
 
-    fn show_connection(&self, ui: &mut egui::Ui, state: &mut AppState) {
+    fn show_connection(&mut self, ui: &mut egui::Ui, state: &mut AppState) {
         ui.add_space(12.0);
         egui::Frame::new()
             .fill(theme::PANEL)
@@ -486,6 +491,10 @@ impl PomodoroApp {
                                     Some(format!("Export failed: {error}"));
                             }
                         }
+                    }
+                    if ui.button("Import data…").clicked() {
+                        self.import_path.clear();
+                        self.show_import_dialog = true;
                     }
                 });
 
@@ -581,6 +590,7 @@ impl PomodoroApp {
             settings.escape_exits_fullscreen = state.settings.escape_exits_fullscreen;
             settings.start_minimized = state.settings.start_minimized;
             settings.close_to_tray = state.settings.close_to_tray;
+            settings.remote_import = state.settings.remote_import;
             if let Err(error) = state.update_settings(settings) {
                 state.error_message = Some(error);
             } else {
@@ -907,6 +917,154 @@ impl PomodoroApp {
             });
         ctx.request_repaint_after(Duration::from_millis(500));
     }
+
+    fn show_import_dialog(&mut self, ctx: &egui::Context, state: &mut AppState) {
+        if !self.show_import_dialog {
+            return;
+        }
+        let mut close = false;
+        egui::Window::new("Import data")
+            .id(Id::new("import-dialog"))
+            .collapsible(false)
+            .resizable(true)
+            .default_width(520.0)
+            .anchor(Align2::CENTER_CENTER, Vec2::ZERO)
+            .show(ctx, |ui| {
+                ui.label(
+                    "Paste the full path to an `all.json` file exported from this app.",
+                );
+                ui.add(
+                    egui::TextEdit::singleline(&mut self.import_path)
+                        .hint_text("C:\\Users\\You\\focusv2\\exports\\2026-10-18-1200\\all.json")
+                        .desired_width(f32::INFINITY)
+                        .id(egui::Id::new("import-path")),
+                );
+                ui.add_space(8.0);
+
+                ui.label("Mode");
+                ui.horizontal(|ui| {
+                    ui.radio_value(
+                        &mut self.import_mode,
+                        import::Mode::Merge,
+                        "Merge (keep existing, add missing)",
+                    );
+                    ui.radio_value(
+                        &mut self.import_mode,
+                        import::Mode::Replace,
+                        "Replace (wipe existing)",
+                    );
+                });
+
+                if self.import_mode == import::Mode::Replace {
+                    ui.label(
+                        egui::RichText::new(
+                            "⚠ Replace will erase your current history and notes.",
+                        )
+                        .color(Color32::from_rgb(243, 139, 168))
+                        .size(12.0),
+                    );
+                }
+                ui.add_space(8.0);
+
+                ui.horizontal(|ui| {
+                    if ui.button("Cancel").clicked() {
+                        close = true;
+                    }
+                    if ui.button("Preview").clicked() {
+                        self.try_import_preview(state);
+                    }
+                    if ui.button("Apply").clicked() {
+                        self.try_import_apply(state);
+                        close = true;
+                    }
+                });
+            });
+        if close {
+            self.show_import_dialog = false;
+        }
+    }
+
+    fn try_import_preview(&self, state: &mut AppState) {
+        let path = self.import_path.trim();
+        if path.is_empty() {
+            state.error_message = Some("Enter a file path first".to_owned());
+            return;
+        }
+        match std::fs::read(path) {
+            Ok(bytes) => match import::parse(&bytes) {
+                Ok(bundle) => {
+                    let preview = import::preview(&bundle, &state.history, &state.notes);
+                    state.error_message = Some(format!(
+                        "Would import: {} days ({}), {} notes — {} days and {} notes overlap",
+                        preview.history_days,
+                        readable_duration(preview.history_seconds),
+                        preview.notes,
+                        preview.overlapping_days.len(),
+                        preview.overlapping_note_ids.len(),
+                    ));
+                }
+                Err(error) => state.error_message = Some(error),
+            },
+            Err(error) => {
+                state.error_message = Some(format!("Could not read {path}: {error}"));
+            }
+        }
+    }
+
+    fn try_import_apply(&self, state: &mut AppState) {
+        let path = self.import_path.trim();
+        if path.is_empty() {
+            state.error_message = Some("Enter a file path first".to_owned());
+            return;
+        }
+        let bytes = match std::fs::read(path) {
+            Ok(bytes) => bytes,
+            Err(error) => {
+                state.error_message = Some(format!("Could not read {path}: {error}"));
+                return;
+            }
+        };
+        let bundle = match import::parse(&bytes) {
+            Ok(bundle) => bundle,
+            Err(error) => {
+                state.error_message = Some(error);
+                return;
+            }
+        };
+
+        let previous_history = state.history.clone();
+        let previous_notes = state.notes.clone();
+
+        let report = import::apply(
+            bundle,
+            &mut state.history,
+            &mut state.notes,
+            self.import_mode,
+        );
+
+        if let Err(error) = state.storage.save_history(&state.history) {
+            state.history = previous_history;
+            state.notes = previous_notes;
+            state.error_message = Some(format!("Could not save history: {error}"));
+            return;
+        }
+        if let Err(error) = state.storage.save_notes(&state.notes) {
+            state.history = previous_history;
+            state.notes = previous_notes;
+            let _ = state.storage.save_history(&state.history);
+            state.error_message = Some(format!("Could not save notes: {error}"));
+            return;
+        }
+
+        state.error_message = Some(format!(
+            "Imported: +{} days, {} days updated, +{} notes, {} notes skipped",
+            report.history_days_added,
+            report.history_days_updated,
+            report.notes_added,
+            report.notes_skipped,
+        ));
+        state.ctx.request_repaint();
+    }
 }
 
 fn setting_control(
@@ -968,15 +1126,6 @@ fn readable_duration(seconds: u64) -> String {
         format!("{minutes}m")
     }
 }
-
-// ---- Window icon ----
-//
-// The PNG is embedded at compile time. It lives at the project root, so
-// this file (src/app.rs) references it as ../icon.png.
-//
-// If you don't have an icon.png yet, either add one, or delete
-// `load_window_icon` and the `if let Some(icon) = icon` block in
-// `native_options`.
 
 fn load_window_icon() -> Option<std::sync::Arc<egui::IconData>> {
     let bytes = include_bytes!("../icon.png");

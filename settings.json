@@ -11,6 +11,7 @@
   "auto_start_next": false,
   "daily_goal_minutes": 0,
   "remote_power_control": true,
+  "remote_import": false,
   "start_minimized": true,
   "close_to_tray": true
 }

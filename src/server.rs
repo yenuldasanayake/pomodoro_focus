@@ -219,6 +219,10 @@ impl AppState {
         self.settings.remote_power_control
     }
 
+    pub fn import_available(&self) -> bool {
+        self.settings.remote_import
+    }
+
     pub fn pending_power_seconds(&self) -> Option<u32> {
         self.pending_power_action
             .as_ref()
@@ -325,14 +329,16 @@ impl AppState {
     pub fn update_settings(&mut self, mut settings: Settings) -> Result<(), String> {
         self.tick();
         settings.sanitize();
-        // Preserve fields the desktop and phone UIs share but don't both
-        // display, so a phone save doesn't clobber desktop-only fields and
-        // vice versa. The two tray fields are NOT in this list because both
-        // UIs expose them and the incoming value wins.
+        // Preserve fields the desktop doesn't manage. Phone-side saves set
+        // these; desktop-side saves carry them through unchanged.
         settings.block_alt_tab = self.settings.block_alt_tab;
         settings.sites_blocked = self.settings.sites_blocked;
         settings.pin = self.settings.pin.clone();
         settings.port = self.settings.port;
+        settings.escape_exits_fullscreen = self.settings.escape_exits_fullscreen;
+        settings.start_minimized = self.settings.start_minimized;
+        settings.close_to_tray = self.settings.close_to_tray;
+        settings.remote_import = self.settings.remote_import;
         self.storage
             .save_settings(&settings)
             .map_err(|error| format!("Could not save settings: {error}"))?;
@@ -642,6 +648,33 @@ impl AppState {
         Ok(())
     }
 
+    pub fn reset_all_data(&mut self) -> Result<(), String> {
+        let previous_history = self.history.clone();
+        let previous_notes = self.notes.clone();
+
+        self.history = History::default();
+        self.notes = Notes::default();
+        self.history_dirty = true;
+        self.undo_deleted_notes.clear();
+
+        if let Err(error) = self.storage.save_history(&self.history) {
+            self.history = previous_history;
+            self.notes = previous_notes;
+            return Err(format!("Could not reset history: {error}"));
+        }
+        if let Err(error) = self.storage.save_notes(&self.notes) {
+            self.history = previous_history;
+            self.notes = previous_notes;
+            let _ = self.storage.save_history(&self.history);
+            return Err(format!("Could not reset notes: {error}"));
+        }
+
+        self.history_dirty = false;
+        self.last_history_flush = Instant::now();
+        self.ctx.request_repaint();
+        Ok(())
+    }
+
     fn collect_study_time(&mut self) {
         let studied = self.timer.take_study_seconds();
         if studied > 0 {
@@ -710,6 +743,9 @@ pub fn build_router(state: SharedState) -> Router {
         .route("/export/notes.csv", get(export_notes_csv))
         .route("/export/all.csv", get(export_all_csv))
         .route("/export/all.json", get(export_all_json))
+        .route("/import/preview", post(import_preview))
+        .route("/import/apply", post(import_apply))
+        .route("/reset", post(reset_all))
         .route("/system/shutdown", post(power_shutdown))
         .route("/system/restart", post(power_restart))
         .route("/system/lock", post(power_lock))
@@ -873,6 +909,7 @@ struct StatusResponse {
     break_suggestion: Option<String>,
     undo_available: bool,
     power_control_available: bool,
+    remote_import: bool,
     pending_power_action: Option<PowerAction>,
     pending_power_seconds: Option<u32>,
     start_minimized: bool,
@@ -901,6 +938,7 @@ async fn status(State(shared): State<SharedState>) -> Result<Json<StatusResponse
 
     let undo_available = state.undo_available();
     let power_control_available = state.power_control_available();
+    let remote_import = state.import_available();
     let pending_power_action = state.pending_power_action.as_ref().map(|p| p.action);
     let pending_power_seconds = state.pending_power_seconds();
 
@@ -936,6 +974,7 @@ async fn status(State(shared): State<SharedState>) -> Result<Json<StatusResponse
         break_suggestion,
         undo_available,
         power_control_available,
+        remote_import,
         pending_power_action,
         pending_power_seconds,
         start_minimized: state.settings.start_minimized,
@@ -1033,6 +1072,145 @@ async fn export_all_json(
 }
 
 #[derive(Deserialize)]
+struct ImportRequest {
+    token: String,
+    file_contents: String,
+}
+
+async fn import_preview(
+    State(shared): State<SharedState>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    Json(request): Json<ImportRequest>,
+) -> Result<Json<ImportPreviewResponse>, ApiError> {
+    let mut state = shared
+        .lock()
+        .map_err(|_| ApiError::internal("App state is unavailable"))?;
+    verify_token(&mut state, addr.ip(), &request.token)?;
+    if !state.import_available() {
+        return Err(ApiError::forbidden("Remote import is disabled"));
+    }
+    let bundle = crate::import::parse(request.file_contents.as_bytes())
+        .map_err(ApiError::bad_request)?;
+    let preview = crate::import::preview(&bundle, &state.history, &state.notes);
+    Ok(Json(ImportPreviewResponse {
+        version: preview.version,
+        exported_at: preview.exported_at,
+        history_days: preview.history_days,
+        history_seconds: preview.history_seconds,
+        notes: preview.notes,
+        overlapping_days: preview.overlapping_days,
+        overlapping_note_ids: preview.overlapping_note_ids,
+    }))
+}
+
+#[derive(Serialize)]
+struct ImportPreviewResponse {
+    version: u32,
+    exported_at: String,
+    history_days: usize,
+    history_seconds: u64,
+    notes: usize,
+    overlapping_days: Vec<String>,
+    overlapping_note_ids: Vec<String>,
+}
+
+#[derive(Deserialize)]
+struct ImportApplyRequest {
+    token: String,
+    file_contents: String,
+    mode: String,
+}
+
+async fn import_apply(
+    State(shared): State<SharedState>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    Json(request): Json<ImportApplyRequest>,
+) -> Result<Json<ImportApplyResponse>, ApiError> {
+    let mut state = shared
+        .lock()
+        .map_err(|_| ApiError::internal("App state is unavailable"))?;
+    verify_token(&mut state, addr.ip(), &request.token)?;
+    if !state.import_available() {
+        return Err(ApiError::forbidden("Remote import is disabled"));
+    }
+    let mode = match request.mode.as_str() {
+        "replace" => crate::import::Mode::Replace,
+        "merge" => crate::import::Mode::Merge,
+        other => {
+            return Err(ApiError::bad_request(format!(
+                "mode must be 'replace' or 'merge', got {other:?}"
+            )));
+        }
+    };
+    let bundle = crate::import::parse(request.file_contents.as_bytes())
+        .map_err(ApiError::bad_request)?;
+
+   let previous_history = state.history.clone();
+let previous_notes = state.notes.clone();
+
+// Take the fields out of state so `apply` can borrow both mutably without
+// overlapping borrows. We put them back immediately after.
+let mut history = std::mem::take(&mut state.history);
+let mut notes = std::mem::take(&mut state.notes);
+let report = crate::import::apply(bundle, &mut history, &mut notes, mode);
+state.history = history;
+state.notes = notes;
+
+if let Err(error) = state.storage.save_history(&state.history) {
+        state.history = previous_history;
+        state.notes = previous_notes;
+        let _ = state.storage.save_history(&state.history);
+        let _ = state.storage.save_notes(&state.notes);
+        return Err(ApiError::internal(format!(
+            "Could not save history: {error}"
+        )));
+    }
+    if let Err(error) = state.storage.save_notes(&state.notes) {
+        state.history = previous_history;
+        state.notes = previous_notes;
+        let _ = state.storage.save_history(&state.history);
+        let _ = state.storage.save_notes(&state.notes);
+        return Err(ApiError::internal(format!(
+            "Could not save notes: {error}"
+        )));
+    }
+
+    state.ctx.request_repaint();
+    Ok(Json(ImportApplyResponse {
+        ok: true,
+        history_days_added: report.history_days_added,
+        history_days_updated: report.history_days_updated,
+        notes_added: report.notes_added,
+        notes_skipped: report.notes_skipped,
+    }))
+}
+
+#[derive(Serialize)]
+struct ImportApplyResponse {
+    ok: bool,
+    history_days_added: usize,
+    history_days_updated: usize,
+    notes_added: usize,
+    notes_skipped: usize,
+}
+
+async fn reset_all(
+    State(shared): State<SharedState>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    Json(request): Json<TokenOnlyRequest>,
+) -> Result<Json<MessageResponse>, ApiError> {
+    let mut state = shared
+        .lock()
+        .map_err(|_| ApiError::internal("App state is unavailable"))?;
+    verify_token(&mut state, addr.ip(), &request.token)?;
+    state.reset_all_data().map_err(ApiError::internal)?;
+    Ok(Json(MessageResponse {
+        ok: true,
+        warning: None,
+    }))
+}
+
+#[derive(Deserialize)]
 struct CommandRequest {
     token: String,
     command: String,
@@ -1071,6 +1249,8 @@ struct SettingsRequest {
     #[serde(default)]
     remote_power_control: bool,
     #[serde(default)]
+    remote_import: bool,
+    #[serde(default)]
     start_minimized: bool,
     #[serde(default)]
     close_to_tray: bool,
@@ -1098,6 +1278,7 @@ async fn update_settings(
         auto_start_next: request.auto_start_next,
         daily_goal_minutes: request.daily_goal_minutes,
         remote_power_control: request.remote_power_control,
+        remote_import: request.remote_import,
         start_minimized: request.start_minimized,
         close_to_tray: request.close_to_tray,
     };

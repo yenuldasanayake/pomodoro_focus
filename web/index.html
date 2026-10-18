@@ -30,12 +30,7 @@ body{
 main{width:min(100% - 28px,480px);margin:0 auto;padding:28px 0 56px}
 .eyebrow{color:var(--muted);letter-spacing:.18em;font-size:.7rem;font-weight:700;text-transform:uppercase}
 h1{font-size:1.35rem;margin:6px 0 22px;font-weight:600;letter-spacing:-.01em}
-.card{
-  background:color-mix(in srgb,var(--panel) 94%,transparent);
-  border:1px solid var(--border);border-radius:var(--radius);
-  padding:22px;margin:14px 0;backdrop-filter:blur(8px);
-  transition:border-color .3s ease;
-}
+.card{background:color-mix(in srgb,var(--panel) 94%,transparent);border:1px solid var(--border);border-radius:var(--radius);padding:22px;margin:14px 0;backdrop-filter:blur(8px);transition:border-color .3s ease}
 .timer{text-align:center;padding:30px 22px 24px}
 .mode{display:inline-flex;align-items:center;gap:8px;color:var(--accent);font-size:.72rem;letter-spacing:.2em;font-weight:700;transition:color .4s ease}
 .mode .dot{width:8px;height:8px;border-radius:50%;background:currentColor;box-shadow:0 0 0 0 currentColor;animation:pulse 2s infinite}
@@ -48,13 +43,7 @@ h1{font-size:1.35rem;margin:6px 0 22px;font-weight:600;letter-spacing:-.01em}
 .today{color:var(--muted);font-size:.88rem;margin-top:4px}
 .buttons{display:flex;gap:10px;margin-top:20px}
 .buttons button{flex:1}
-.button{
-  border:0;border-radius:20px;padding:13px 16px;background:var(--border);color:var(--text);
-  font-weight:650;font-size:.95rem;font-family:inherit;cursor:pointer;
-  transition:transform .08s ease,background .2s ease,opacity .2s ease;
-  text-decoration:none;text-align:center;
-  display:inline-flex;align-items:center;justify-content:center;
-}
+.button{border:0;border-radius:20px;padding:13px 16px;background:var(--border);color:var(--text);font-weight:650;font-size:.95rem;font-family:inherit;cursor:pointer;transition:transform .08s ease,background .2s ease,opacity .2s ease;text-decoration:none;text-align:center;display:inline-flex;align-items:center;justify-content:center}
 .button.primary{background:var(--accent);color:#202124}
 .button.ghost{background:transparent;border:1px solid var(--border);color:var(--muted)}
 .button.danger{background:transparent;border:1px solid var(--accent);color:var(--accent)}
@@ -66,7 +55,8 @@ h1{font-size:1.35rem;margin:6px 0 22px;font-weight:600;letter-spacing:-.01em}
 .stat .v{font-size:1.15rem;font-weight:600;font-variant-numeric:tabular-nums}
 .stat .l{color:var(--muted);font-size:.68rem;letter-spacing:.12em;text-transform:uppercase;margin-top:2px}
 label{display:block;color:var(--muted);font-size:.8rem;margin:12px 0 6px;font-weight:500}
-input:not([type=checkbox]):not([type=range]){width:100%;padding:12px 14px;border:1px solid var(--border);border-radius:12px;background:var(--bg2);color:var(--text);font:inherit;font-size:16px;transition:border-color .2s ease}
+input:not([type=checkbox]):not([type=range]):not([type=file]){width:100%;padding:12px 14px;border:1px solid var(--border);border-radius:12px;background:var(--bg2);color:var(--text);font:inherit;font-size:16px;transition:border-color .2s ease}
+input[type=file]{width:100%;padding:10px;border:1px solid var(--border);border-radius:12px;background:var(--bg2);color:var(--text);font:inherit;font-size:.9rem}
 input:focus{outline:none;border-color:var(--accent)}
 .check-row{display:flex;align-items:center;gap:10px;margin:14px 0 0;cursor:pointer}
 .check-row input{width:18px;height:18px;accent-color:var(--accent);cursor:pointer}
@@ -95,29 +85,15 @@ input:focus{outline:none;border-color:var(--accent)}
 .toast.error{border-left-color:var(--accent)}
 .toast.warn{border-left-color:var(--warn)}
 @keyframes slideup{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
-
 #goal-bar{margin-top:10px}
 #goal-fill{transition:width .4s ease,background .3s ease}
-
-.slider{
-  position:relative;height:56px;margin-top:12px;
-  background:var(--bg2);border:1px solid var(--border);border-radius:20px;
-  overflow:hidden;user-select:none;touch-action:pan-y;
-  display:flex;align-items:center;justify-content:center;
-}
+.slider{position:relative;height:56px;margin-top:12px;background:var(--bg2);border:1px solid var(--border);border-radius:20px;overflow:hidden;user-select:none;touch-action:pan-y;display:flex;align-items:center;justify-content:center}
 .slider-fill{position:absolute;inset:0;width:0%;background:linear-gradient(90deg,#8a4444,#c0392b);transition:width .05s linear}
-.slider-knob{
-  position:absolute;top:4px;left:4px;width:48px;height:48px;
-  background:#1a1a1a;border:1px solid #666;border-radius:16px;
-  display:flex;align-items:center;justify-content:center;
-  font-size:20px;color:#f28b82;cursor:grab;z-index:2;
-  transition:left .15s ease;
-}
+.slider-knob{position:absolute;top:4px;left:4px;width:48px;height:48px;background:#1a1a1a;border:1px solid #666;border-radius:16px;display:flex;align-items:center;justify-content:center;font-size:20px;color:#f28b82;cursor:grab;z-index:2;transition:left .15s ease}
 .slider-knob:active{cursor:grabbing}
 .slider-label{position:relative;z-index:1;color:var(--muted);font-weight:600;pointer-events:none}
-
 #power-banner{display:none;border-color:#8a4444;background:#2a1616}
-
+#reset-card{border-color:#8a4444}
 body.offline{filter:saturate(.4)}
 body.offline .mode .dot{animation:none;background:var(--muted)}
 body.flash::before{content:"";position:fixed;inset:0;background:var(--accent);opacity:.3;pointer-events:none;z-index:40;animation:flash .8s ease forwards}
@@ -187,6 +163,27 @@ body.flash::before{content:"";position:fixed;inset:0;background:var(--accent);op
     </div>
   </section>
 
+  <section class="card" id="import-card" style="display:none">
+    <div class="eyebrow">Import data</div>
+    <p class="today" style="margin-top:6px">
+      Restore from a previous <code>all.json</code> export. Merge keeps existing data; replace wipes it.
+    </p>
+    <input id="import-file" type="file" accept="application/json,.json" style="margin-top:12px">
+    <div style="display:flex;gap:8px;margin-top:12px">
+      <button class="button ghost" style="flex:1" onclick="previewImport()">Preview</button>
+      <button class="button primary" style="flex:1" onclick="applyImport()">Apply merge</button>
+    </div>
+    <button class="button danger wide" style="margin-top:8px" onclick="applyImportReplace()">Replace (wipes data)</button>
+  </section>
+
+  <section class="card" id="reset-card">
+    <div class="eyebrow" style="color:#f28b82">Danger zone</div>
+    <p class="today" style="margin-top:6px">
+      Permanently delete all study history and notes. Settings, PIN, and blocked sites are not touched.
+    </p>
+    <button class="button danger wide" style="margin-top:14px" onclick="resetAllData()">Reset all data</button>
+  </section>
+
   <section class="card">
     <div class="eyebrow">Stay focused</div>
     <p id="block-description" class="today" style="margin-top:6px">Block Instagram, YouTube, TikTok, and Facebook.</p>
@@ -213,6 +210,7 @@ body.flash::before{content:"";position:fixed;inset:0;background:var(--accent);op
     </div>
     <label class="check-row"><input id="auto-start" type="checkbox"><span>Auto-start next session</span></label>
     <label class="check-row"><input id="power-control" type="checkbox"><span>Allow remote shutdown/restart/lock</span></label>
+    <label class="check-row"><input id="remote-import" type="checkbox"><span>Allow remote data import</span></label>
     <label class="check-row"><input id="start-minimized" type="checkbox"><span>Start minimized to tray</span></label>
     <label class="check-row"><input id="close-to-tray" type="checkbox"><span>Always minimize to tray on close</span></label>
     <label class="check-row"><input id="escape-enabled" type="checkbox"><span>Allow Esc to toggle fullscreen</span></label>
@@ -334,12 +332,13 @@ async function saveSettings(){
       short_break_minutes:+$("short").value,
       long_break_minutes:+$("long").value,
       sessions_before_long_break:+$("sessions").value,
-      start_minimized:$("start-minimized").checked,
-      close_to_tray:$("close-to-tray").checked,
       escape_exits_fullscreen:$("escape-enabled").checked,
       auto_start_next:$("auto-start").checked,
       daily_goal_minutes:+$("goal").value,
       remote_power_control:$("power-control").checked,
+      remote_import:$("remote-import").checked,
+      start_minimized:$("start-minimized").checked,
+      close_to_tray:$("close-to-tray").checked,
     });
     toast("Settings saved");
   }catch(e){toast(e.message,"error")}
@@ -564,6 +563,53 @@ function cancelPower(){
     .catch(e=>toast(e.message,"error"));
 }
 
+async function resetAllData(){
+  if(!confirm("Permanently delete all study history and notes? This cannot be undone."))return;
+  if(!confirm("Are you sure? Click OK again to confirm."))return;
+  try{
+    await post("/reset",{});
+    toast("All data cleared");
+    lastNoteSignature="";
+    refresh();
+  }catch(e){toast(e.message,"error")}
+}
+
+async function readImportFile(){
+  const input=$("import-file");
+  if(!input.files||!input.files[0])throw new Error("Choose an all.json file first");
+  return await input.files[0].text();
+}
+
+async function previewImport(){
+  try{
+    const contents=await readImportFile();
+    const r=await post("/import/preview",{file_contents:contents});
+    toast(`Ready: ${r.history_days} days, ${r.notes} notes · ${r.overlapping_days.length} day(s), ${r.overlapping_note_ids.length} note(s) overlap`);
+  }catch(e){toast(e.message,"error")}
+}
+
+async function applyImport(){
+  if(!confirm("Merge this file into your existing data? Existing entries are kept, missing ones are added."))return;
+  try{
+    const contents=await readImportFile();
+    const r=await post("/import/apply",{file_contents:contents,mode:"merge"});
+    toast(`Merged: +${r.history_days_added} days, +${r.notes_added} notes (${r.notes_skipped} skipped)`);
+    lastNoteSignature="";
+    refresh();
+  }catch(e){toast(e.message,"error")}
+}
+
+async function applyImportReplace(){
+  if(!confirm("Replace ALL history and notes with this file? This cannot be undone."))return;
+  try{
+    const contents=await readImportFile();
+    const r=await post("/import/apply",{file_contents:contents,mode:"replace"});
+    toast(`Replaced: ${r.history_days_added} days, ${r.notes_added} notes`);
+    lastNoteSignature="";
+    refresh();
+  }catch(e){toast(e.message,"error")}
+}
+
 function setupSlider(el){
   const action=el.dataset.action;
   const knob=el.querySelector(".slider-knob");
@@ -676,8 +722,6 @@ async function refresh(){
       "Block Alt+Tab, Win+Tab, and taskbar app switching while Pomodoro Focus is running.";
 
     if(!loaded){
-      $("start-minimized").checked=s.start_minimized;
-      $("close-to-tray").checked=s.close_to_tray;
       $("study").value=s.study_minutes;
       $("short").value=s.short_break_minutes;
       $("long").value=s.long_break_minutes;
@@ -686,6 +730,9 @@ async function refresh(){
       $("auto-start").checked=s.auto_start_next;
       $("escape-enabled").checked=s.escape_exits_fullscreen;
       $("power-control").checked=s.power_control_available;
+      $("remote-import").checked=s.remote_import;
+      $("start-minimized").checked=s.start_minimized;
+      $("close-to-tray").checked=s.close_to_tray;
       loaded=true;
     }
 
@@ -700,7 +747,9 @@ async function refresh(){
     }
 
     $("power-control").checked=!!s.power_control_available;
+    $("remote-import").checked=!!s.remote_import;
     $("power-card").style.display=s.power_control_available?"block":"none";
+    $("import-card").style.display=s.remote_import?"block":"none";
 
     const banner=$("power-banner");
     if(s.pending_power_seconds&&s.pending_power_seconds>0&&s.pending_power_action){

@@ -21,6 +21,7 @@ pub struct Settings {
     pub auto_start_next: bool,
     pub daily_goal_minutes: u32,
     pub remote_power_control: bool,
+    pub remote_import: bool,
     pub start_minimized: bool,
     pub close_to_tray: bool,
 }
@@ -40,6 +41,7 @@ impl Default for Settings {
             auto_start_next: false,
             daily_goal_minutes: 0,
             remote_power_control: false,
+            remote_import: false,
             start_minimized: false,
             close_to_tray: false,
         }
@@ -85,6 +87,7 @@ mod settings_tests {
         assert!(!settings.auto_start_next);
         assert_eq!(settings.daily_goal_minutes, 0);
         assert!(!settings.remote_power_control);
+        assert!(!settings.remote_import);
         assert!(!settings.start_minimized);
         assert!(!settings.close_to_tray);
     }
@@ -183,6 +186,12 @@ mod settings_tests {
     fn remote_power_control_defaults_off() {
         let settings: Settings = serde_json::from_str(r#"{}"#).unwrap();
         assert!(!settings.remote_power_control);
+    }
+
+    #[test]
+    fn remote_import_defaults_off() {
+        let settings: Settings = serde_json::from_str(r#"{}"#).unwrap();
+        assert!(!settings.remote_import);
     }
 
     #[test]
