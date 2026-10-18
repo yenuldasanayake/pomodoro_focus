@@ -329,16 +329,15 @@ impl AppState {
     pub fn update_settings(&mut self, mut settings: Settings) -> Result<(), String> {
         self.tick();
         settings.sanitize();
-        // Preserve fields the desktop doesn't manage. Phone-side saves set
-        // these; desktop-side saves carry them through unchanged.
+        // Preserve only the fields that callers (desktop and phone) never
+        // explicitly set in this payload. `escape_exits_fullscreen`,
+        // `start_minimized`, `close_to_tray`, and `remote_import` are user-
+        // controlled from the phone (and, in some cases, the desktop), so
+        // the incoming value wins.
         settings.block_alt_tab = self.settings.block_alt_tab;
         settings.sites_blocked = self.settings.sites_blocked;
         settings.pin = self.settings.pin.clone();
         settings.port = self.settings.port;
-        settings.escape_exits_fullscreen = self.settings.escape_exits_fullscreen;
-        settings.start_minimized = self.settings.start_minimized;
-        settings.close_to_tray = self.settings.close_to_tray;
-        settings.remote_import = self.settings.remote_import;
         self.storage
             .save_settings(&settings)
             .map_err(|error| format!("Could not save settings: {error}"))?;
@@ -1145,18 +1144,16 @@ async fn import_apply(
     let bundle = crate::import::parse(request.file_contents.as_bytes())
         .map_err(ApiError::bad_request)?;
 
-   let previous_history = state.history.clone();
-let previous_notes = state.notes.clone();
+    let previous_history = state.history.clone();
+    let previous_notes = state.notes.clone();
 
-// Take the fields out of state so `apply` can borrow both mutably without
-// overlapping borrows. We put them back immediately after.
-let mut history = std::mem::take(&mut state.history);
-let mut notes = std::mem::take(&mut state.notes);
-let report = crate::import::apply(bundle, &mut history, &mut notes, mode);
-state.history = history;
-state.notes = notes;
+    let mut history = std::mem::take(&mut state.history);
+    let mut notes = std::mem::take(&mut state.notes);
+    let report = crate::import::apply(bundle, &mut history, &mut notes, mode);
+    state.history = history;
+    state.notes = notes;
 
-if let Err(error) = state.storage.save_history(&state.history) {
+    if let Err(error) = state.storage.save_history(&state.history) {
         state.history = previous_history;
         state.notes = previous_notes;
         let _ = state.storage.save_history(&state.history);

@@ -25,6 +25,7 @@ pub struct PomodoroApp {
     import_path: String,
     show_import_dialog: bool,
     import_mode: import::Mode,
+    app_is_fullscreen: bool,
 }
 
 #[derive(Clone)]
@@ -71,6 +72,7 @@ impl PomodoroApp {
             import_path: String::new(),
             show_import_dialog: false,
             import_mode: import::Mode::Merge,
+            app_is_fullscreen: false,
         })
     }
 }
@@ -148,11 +150,18 @@ impl eframe::App for PomodoroApp {
             ctx.send_viewport_cmd(egui::ViewportCommand::Title(title));
         }
 
+        // Escape toggles fullscreen. We track the state in a local bool so
+        // repeated toggles are deterministic even if the OS viewport reports
+        // stale fullscreen information mid-transition.
         if state.settings.escape_exits_fullscreen
             && ctx.input(|input| input.key_pressed(Key::Escape))
         {
-            let is_fullscreen = ctx.input(|input| input.viewport().fullscreen.unwrap_or(false));
-            ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(!is_fullscreen));
+            self.app_is_fullscreen = !self.app_is_fullscreen;
+            ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(self.app_is_fullscreen));
+        }
+        // Resync our local flag from the OS when it reports a definitive value.
+        if let Some(v) = ctx.input(|input| input.viewport().fullscreen) {
+            self.app_is_fullscreen = v;
         }
 
         let text_editing = ctx.memory(|memory| memory.focused().is_some());
@@ -1035,12 +1044,11 @@ impl PomodoroApp {
         let previous_history = state.history.clone();
         let previous_notes = state.notes.clone();
 
-        let report = import::apply(
-            bundle,
-            &mut state.history,
-            &mut state.notes,
-            self.import_mode,
-        );
+        let mut history = std::mem::take(&mut state.history);
+        let mut notes = std::mem::take(&mut state.notes);
+        let report = import::apply(bundle, &mut history, &mut notes, self.import_mode);
+        state.history = history;
+        state.notes = notes;
 
         if let Err(error) = state.storage.save_history(&state.history) {
             state.history = previous_history;

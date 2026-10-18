@@ -13,5 +13,5 @@
   "remote_power_control": true,
   "remote_import": false,
   "start_minimized": true,
-  "close_to_tray": true
+  "close_to_tray": false
 }
