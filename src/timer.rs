@@ -35,12 +35,10 @@ pub struct Timer {
     pub remaining_seconds: u64,
     pub completed_study_sessions: u32,
     pub running: bool,
+    pub elapsed_in_mode: u64,
     last_tick: Instant,
     fractional_elapsed: Duration,
     study_seconds_since_update: u64,
-    /// Snapshot of the settings the current session was started with.
-    /// Used by `set_settings` to compute how much time has elapsed even
-    /// if the duration for the current mode just changed.
     settings_snapshot: Settings,
 }
 
@@ -51,6 +49,7 @@ impl Timer {
             remaining_seconds: Mode::Study.duration_seconds(settings),
             completed_study_sessions: 0,
             running: false,
+            elapsed_in_mode: 0,
             last_tick: Instant::now(),
             fractional_elapsed: Duration::ZERO,
             study_seconds_since_update: 0,
@@ -71,6 +70,7 @@ impl Timer {
     pub fn reset(&mut self, settings: &Settings) {
         self.running = false;
         self.remaining_seconds = self.mode.duration_seconds(settings);
+        self.elapsed_in_mode = 0;
         self.last_tick = Instant::now();
         self.settings_snapshot = settings.clone();
     }
@@ -102,15 +102,6 @@ impl Timer {
         (1.0 - self.remaining_seconds as f32 / total as f32).clamp(0.0, 1.0)
     }
 
-    /// Apply new settings.
-    ///
-    /// If the timer is running mid-session, we preserve the elapsed time
-    /// instead of resetting to the new full duration. E.g. if you're 10
-    /// minutes into a 25-minute focus and change the duration to 30, you
-    /// keep your 10 minutes and now have 20 to go.
-    ///
-    /// If the timer is paused or the session hasn't started, the timer
-    /// is reset to the new full duration as before.
     pub fn set_settings(&mut self, settings: &Settings) {
         let old_total = self.mode.duration_seconds(&self.settings_snapshot);
         let new_total = self.mode.duration_seconds(settings);
@@ -138,6 +129,7 @@ impl Timer {
             let elapsed_seconds = elapsed.as_secs();
             self.fractional_elapsed = elapsed - Duration::from_secs(elapsed_seconds);
             let applied = elapsed_seconds.min(self.remaining_seconds);
+            self.elapsed_in_mode += applied;
             if self.mode == Mode::Study {
                 self.study_seconds_since_update += applied;
             }
@@ -146,7 +138,7 @@ impl Timer {
         self.last_tick = now;
     }
 
-    fn advance(&mut self, settings: &Settings) {
+    pub fn advance(&mut self, settings: &Settings) {
         self.mode = match self.mode {
             Mode::Study => {
                 let every = settings.sessions_before_long_break.max(1);
@@ -161,6 +153,7 @@ impl Timer {
             Mode::ShortBreak | Mode::LongBreak => Mode::Study,
         };
         self.remaining_seconds = self.mode.duration_seconds(settings);
+        self.elapsed_in_mode = 0;
         self.last_tick = Instant::now();
         self.fractional_elapsed = Duration::ZERO;
         self.settings_snapshot = settings.clone();
@@ -205,6 +198,7 @@ mod tests {
 
         assert!(!timer.running);
         assert_eq!(timer.remaining_seconds, 15 * 60);
+        assert_eq!(timer.elapsed_in_mode, 0);
     }
 
     #[test]
@@ -215,7 +209,6 @@ mod tests {
         };
         let mut timer = Timer::new(&settings_25);
         timer.start();
-        // Simulate 10 minutes elapsed.
         timer.remaining_seconds = 15 * 60;
 
         let settings_30 = Settings {
@@ -224,7 +217,6 @@ mod tests {
         };
         timer.set_settings(&settings_30);
 
-        // 10 minutes elapsed, 20 remaining of 30.
         assert_eq!(timer.remaining_seconds, 20 * 60);
         assert!(timer.running);
     }
@@ -256,7 +248,6 @@ mod tests {
         };
         let mut timer = Timer::new(&settings_25);
         timer.start();
-        // 24 minutes elapsed, 1 remaining.
         timer.remaining_seconds = 60;
 
         let settings_1 = Settings {
@@ -265,7 +256,6 @@ mod tests {
         };
         timer.set_settings(&settings_1);
 
-        // Clamped to at least 1 second so `update` has something to consume.
         assert_eq!(timer.remaining_seconds, 1);
     }
 }

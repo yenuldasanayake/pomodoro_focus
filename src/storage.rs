@@ -18,6 +18,11 @@ pub struct Settings {
     pub sites_blocked: bool,
     pub pin: String,
     pub port: u16,
+    pub auto_start_next: bool,
+    pub daily_goal_minutes: u32,
+    pub remote_power_control: bool,
+    pub start_minimized: bool,
+    pub close_to_tray: bool,
 }
 
 impl Default for Settings {
@@ -32,6 +37,11 @@ impl Default for Settings {
             sites_blocked: false,
             pin: String::new(),
             port: 0,
+            auto_start_next: false,
+            daily_goal_minutes: 0,
+            remote_power_control: false,
+            start_minimized: false,
+            close_to_tray: false,
         }
     }
 }
@@ -49,6 +59,9 @@ impl Settings {
             && (self.pin.len() != 8 || !self.pin.chars().all(|c| c.is_ascii_digit()))
         {
             self.pin.clear();
+        }
+        if self.daily_goal_minutes > 0 {
+            self.daily_goal_minutes = self.daily_goal_minutes.clamp(15, 720);
         }
     }
 }
@@ -69,6 +82,11 @@ mod settings_tests {
         assert!(!settings.sites_blocked);
         assert!(settings.pin.is_empty());
         assert_eq!(settings.port, 0);
+        assert!(!settings.auto_start_next);
+        assert_eq!(settings.daily_goal_minutes, 0);
+        assert!(!settings.remote_power_control);
+        assert!(!settings.start_minimized);
+        assert!(!settings.close_to_tray);
     }
 
     #[test]
@@ -128,6 +146,50 @@ mod settings_tests {
         settings.sanitize();
         assert_eq!(settings.pin, "98765432");
         assert_eq!(settings.port, 51234);
+    }
+
+    #[test]
+    fn auto_start_and_goal_default_off() {
+        let settings: Settings = serde_json::from_str(r#"{}"#).unwrap();
+        assert!(!settings.auto_start_next);
+        assert_eq!(settings.daily_goal_minutes, 0);
+    }
+
+    #[test]
+    fn goal_is_clamped_when_nonzero() {
+        let mut settings = Settings {
+            daily_goal_minutes: 5,
+            ..Settings::default()
+        };
+        settings.sanitize();
+        assert_eq!(settings.daily_goal_minutes, 15);
+
+        let mut settings = Settings {
+            daily_goal_minutes: 5000,
+            ..Settings::default()
+        };
+        settings.sanitize();
+        assert_eq!(settings.daily_goal_minutes, 720);
+
+        let mut settings = Settings {
+            daily_goal_minutes: 0,
+            ..Settings::default()
+        };
+        settings.sanitize();
+        assert_eq!(settings.daily_goal_minutes, 0);
+    }
+
+    #[test]
+    fn remote_power_control_defaults_off() {
+        let settings: Settings = serde_json::from_str(r#"{}"#).unwrap();
+        assert!(!settings.remote_power_control);
+    }
+
+    #[test]
+    fn tray_settings_default_off() {
+        let settings: Settings = serde_json::from_str(r#"{}"#).unwrap();
+        assert!(!settings.start_minimized);
+        assert!(!settings.close_to_tray);
     }
 }
 

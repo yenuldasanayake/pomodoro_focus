@@ -1,6 +1,6 @@
 use crate::{
-    alt_tab, charts, export, site_blocker,
-    server::{self, AppState, SharedState},
+    alt_tab, breaks, charts, export, site_blocker, tray,
+    server::{self, AppState, PowerAction, SharedState},
     storage::Storage,
     theme,
     timer::Mode,
@@ -19,6 +19,9 @@ pub struct PomodoroApp {
     transition_from: Color32,
     transition_started: Instant,
     editing_note: Option<EditingNote>,
+    undo_started: Option<Instant>,
+    tray: Option<tray::TrayHandle>,
+    quit_from_tray: bool,
 }
 
 #[derive(Clone)]
@@ -36,6 +39,21 @@ impl PomodoroApp {
         let transition_from = theme::accent(previous_mode);
         let shared = Arc::new(Mutex::new(state));
         server::start_server(shared.clone());
+
+        let tray = match tray::TrayHandle::new() {
+            Ok(handle) => Some(handle),
+            Err(error) => {
+                eprintln!("Could not create tray icon: {error}");
+                None
+            }
+        };
+        if tray.is_none() {
+            ctx.egui_ctx
+                .send_viewport_cmd(egui::ViewportCommand::Visible(true));
+            ctx.egui_ctx
+                .send_viewport_cmd(egui::ViewportCommand::Minimized(false));
+        }
+
         Ok(Self {
             shared,
             note_text: String::new(),
@@ -44,6 +62,9 @@ impl PomodoroApp {
             transition_from,
             transition_started: Instant::now(),
             editing_note: None,
+            undo_started: None,
+            tray,
+            quit_from_tray: false,
         })
     }
 }
@@ -52,6 +73,46 @@ impl eframe::App for PomodoroApp {
     fn ui(&mut self, root_ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = root_ui.ctx().clone();
         theme::apply(&ctx);
+
+        // Tray events.
+        if let Some(tray) = &self.tray {
+            for event in tray.poll() {
+                match event {
+                    tray::TrayEvent::ShowWindow => {
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+                    }
+                    tray::TrayEvent::HideWindow => {
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+                    }
+                    tray::TrayEvent::ToggleTimer => {
+                        if let Ok(mut state) = self.shared.lock() {
+                            let command = if state.timer.running { "pause" } else { "start" };
+                            let _ = state.execute_command(command);
+                        }
+                    }
+                    tray::TrayEvent::Quit => {
+                        self.quit_from_tray = true;
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                    }
+                }
+            }
+        }
+
+        // Close handling.
+        if ctx.input(|i| i.viewport().close_requested()) && !self.quit_from_tray {
+            let mut minimize_instead = false;
+            if let Ok(state) = self.shared.lock() {
+                if state.settings.close_to_tray || state.timer.running {
+                    minimize_instead = true;
+                }
+            }
+            if minimize_instead {
+                ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+                ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+            }
+        }
 
         let shared = self.shared.clone();
         let Ok(mut state) = shared.lock() else {
@@ -62,6 +123,26 @@ impl eframe::App for PomodoroApp {
             });
             return;
         };
+
+        if state.should_restore_window {
+            state.should_restore_window = false;
+            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+            ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
+            ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+            ctx.request_repaint();
+        }
+
+        {
+            let minutes = state.timer.remaining_seconds / 60;
+            let seconds = state.timer.remaining_seconds % 60;
+            let label = match state.timer.mode {
+                Mode::Study => "FOCUS",
+                Mode::ShortBreak => "SHORT BREAK",
+                Mode::LongBreak => "LONG BREAK",
+            };
+            let title = format!("Pomodoro Focus — {minutes:02}:{seconds:02} · {label}");
+            ctx.send_viewport_cmd(egui::ViewportCommand::Title(title));
+        }
 
         if state.settings.escape_exits_fullscreen
             && ctx.input(|input| input.key_pressed(Key::Escape))
@@ -143,6 +224,8 @@ impl eframe::App for PomodoroApp {
             });
 
         self.show_note_popup(&ctx, &mut state);
+        self.show_undo_toast(&ctx, &mut state);
+        self.show_power_banner(&ctx, &mut state);
 
         if let Some(message) = &state.server_error {
             egui::Area::new(Id::new("server-error"))
@@ -182,7 +265,7 @@ impl PomodoroApp {
         ui.horizontal(|ui| {
             ui.add_space(4.0);
             ui.label(
-                egui::RichText::new("◉  POMODORO FOCUS")
+                egui::RichText::new("POMODORO FOCUS BY YENUL")
                     .size(15.0)
                     .strong()
                     .color(theme::TEXT),
@@ -245,13 +328,64 @@ impl PomodoroApp {
             FontId::proportional(96.0),
             theme::TEXT,
         );
-        painter.text(
-            center + Vec2::new(0.0, 78.0),
-            Align2::CENTER_CENTER,
-            format!("TODAY  {}", readable_duration(state.history.today_seconds())),
-            FontId::proportional(14.0),
-            theme::MUTED,
-        );
+
+        if let Some(suggestion) =
+            breaks::current_suggestion(state.timer.mode, state.timer.elapsed_in_mode)
+        {
+            painter.text(
+                center + Vec2::new(0.0, 78.0),
+                Align2::CENTER_CENTER,
+                format!("💡 {suggestion}"),
+                FontId::proportional(13.0),
+                theme::MUTED,
+            );
+        } else {
+            painter.text(
+                center + Vec2::new(0.0, 78.0),
+                Align2::CENTER_CENTER,
+                format!(
+                    "TODAY  {}",
+                    readable_duration(state.history.today_seconds())
+                ),
+                FontId::proportional(14.0),
+                theme::MUTED,
+            );
+        }
+
+        if state.settings.daily_goal_minutes > 0 {
+            let goal_secs = u64::from(state.settings.daily_goal_minutes) * 60;
+            let today = state.history.today_seconds();
+            let progress = (today as f32 / goal_secs as f32).clamp(0.0, 1.0);
+            let bar_width = radius * 1.4;
+            let bar_height = 6.0;
+            let bar_rect = egui::Rect::from_center_size(
+                center + Vec2::new(0.0, 148.0),
+                Vec2::new(bar_width, bar_height),
+            );
+            painter.rect_filled(bar_rect, 3.0, Color32::from_rgb(60, 64, 67));
+            let filled = egui::Rect::from_min_size(
+                bar_rect.min,
+                Vec2::new(bar_width * progress, bar_height),
+            );
+            let fill_color = if progress >= 1.0 {
+                Color32::from_rgb(129, 201, 149)
+            } else {
+                accent
+            };
+            painter.rect_filled(filled, 3.0, fill_color);
+            painter.text(
+                center + Vec2::new(0.0, 162.0),
+                Align2::CENTER_CENTER,
+                format!(
+                    "GOAL  {} / {}",
+                    readable_duration(today),
+                    readable_duration(goal_secs),
+                ),
+                FontId::proportional(11.0),
+                theme::MUTED,
+            );
+        }
+
         painter.circle_filled(center + Vec2::new(0.0, 116.0), 3.5, accent);
     }
 
@@ -389,7 +523,7 @@ impl PomodoroApp {
         ui.horizontal(|ui| {
             ui.heading("Session settings");
             ui.label(
-                egui::RichText::new("Changes save automatically")
+                egui::RichText::new("Changes save automatically · tray & fullscreen options on the phone")
                     .size(12.0)
                     .color(theme::MUTED),
             );
@@ -416,8 +550,37 @@ impl PomodoroApp {
                 &mut settings.sessions_before_long_break,
                 1..=12,
             );
+            changed |= setting_control(
+                ui,
+                "Daily goal · min (0 = off)",
+                &mut settings.daily_goal_minutes,
+                0..=720,
+            );
         });
+        ui.add_space(4.0);
+        if ui
+            .checkbox(&mut settings.auto_start_next, "Auto-start next session")
+            .changed()
+        {
+            changed = true;
+        }
+        if ui
+            .checkbox(
+                &mut settings.remote_power_control,
+                "Allow remote shutdown/restart/lock from phone",
+            )
+            .changed()
+        {
+            changed = true;
+        }
         if changed {
+            settings.block_alt_tab = state.settings.block_alt_tab;
+            settings.sites_blocked = state.settings.sites_blocked;
+            settings.pin = state.settings.pin.clone();
+            settings.port = state.settings.port;
+            settings.escape_exits_fullscreen = state.settings.escape_exits_fullscreen;
+            settings.start_minimized = state.settings.start_minimized;
+            settings.close_to_tray = state.settings.close_to_tray;
             if let Err(error) = state.update_settings(settings) {
                 state.error_message = Some(error);
             } else {
@@ -610,7 +773,10 @@ impl PomodoroApp {
 
         if let Some(id) = pending_delete {
             match state.delete_note(&id) {
-                Ok(()) => state.error_message = None,
+                Ok(()) => {
+                    state.error_message = None;
+                    self.undo_started = Some(Instant::now());
+                }
                 Err(error) => state.error_message = Some(error),
             }
         }
@@ -629,7 +795,10 @@ impl PomodoroApp {
                 ui.label("A quick note makes it easier to see what your focus added up to.");
                 ui.add_space(8.0);
                 ui.label("Accomplishment");
-                ui.add(egui::TextEdit::singleline(&mut self.note_text).id(egui::Id::new("popup-acc")));
+                ui.add(
+                    egui::TextEdit::singleline(&mut self.note_text)
+                        .id(egui::Id::new("popup-acc")),
+                );
                 ui.add_space(4.0);
                 ui.label("Subject tag (optional)");
                 ui.add(
@@ -660,6 +829,83 @@ impl PomodoroApp {
                     }
                 });
             });
+    }
+
+    fn show_undo_toast(&mut self, ctx: &egui::Context, state: &mut AppState) {
+        let Some(started) = self.undo_started else {
+            return;
+        };
+        if started.elapsed() >= Duration::from_secs(30) || !state.undo_available() {
+            self.undo_started = None;
+            return;
+        }
+
+        let seconds_left = 30u64.saturating_sub(started.elapsed().as_secs());
+        egui::Area::new(Id::new("undo-toast"))
+            .anchor(Align2::CENTER_BOTTOM, Vec2::new(0.0, -32.0))
+            .show(ctx, |ui| {
+                egui::Frame::new()
+                    .fill(Color32::from_rgb(45, 55, 45))
+                    .corner_radius(12.0)
+                    .inner_margin(egui::Margin::symmetric(16, 10))
+                    .show(ui, |ui| {
+                        ui.horizontal(|ui| {
+                            ui.label(
+                                egui::RichText::new(format!("Note deleted · {seconds_left}s"))
+                                    .color(theme::TEXT),
+                            );
+                            if ui.button("Undo").clicked() {
+                                match state.undo_delete_note() {
+                                    Ok(()) => {
+                                        state.error_message = None;
+                                        self.undo_started = None;
+                                    }
+                                    Err(error) => state.error_message = Some(error),
+                                }
+                            }
+                        });
+                    });
+            });
+        ctx.request_repaint_after(Duration::from_millis(500));
+    }
+
+    fn show_power_banner(&mut self, ctx: &egui::Context, state: &mut AppState) {
+        let (Some(action), Some(seconds)) = (
+            state.pending_power_action.as_ref().map(|p| p.action),
+            state.pending_power_seconds(),
+        ) else {
+            return;
+        };
+
+        let label = match action {
+            PowerAction::Shutdown => "Shutdown",
+            PowerAction::Restart => "Restart",
+        };
+
+        egui::Area::new(Id::new("pending-power"))
+            .anchor(Align2::CENTER_TOP, Vec2::new(0.0, 24.0))
+            .show(ctx, |ui| {
+                egui::Frame::new()
+                    .fill(Color32::from_rgb(120, 40, 40))
+                    .corner_radius(12.0)
+                    .inner_margin(egui::Margin::symmetric(16, 12))
+                    .show(ui, |ui| {
+                        ui.horizontal(|ui| {
+                            ui.label(
+                                egui::RichText::new(format!("{label} in {seconds}s"))
+                                    .strong()
+                                    .color(theme::TEXT),
+                            );
+                            if ui.button("Cancel").clicked() {
+                                match state.cancel_power_action() {
+                                    Ok(()) => state.error_message = None,
+                                    Err(error) => state.error_message = Some(error),
+                                }
+                            }
+                        });
+                    });
+            });
+        ctx.request_repaint_after(Duration::from_millis(500));
     }
 }
 
@@ -723,11 +969,37 @@ fn readable_duration(seconds: u64) -> String {
     }
 }
 
-pub fn native_options() -> eframe::NativeOptions {
+// ---- Window icon ----
+//
+// The PNG is embedded at compile time. It lives at the project root, so
+// this file (src/app.rs) references it as ../icon.png.
+//
+// If you don't have an icon.png yet, either add one, or delete
+// `load_window_icon` and the `if let Some(icon) = icon` block in
+// `native_options`.
+
+fn load_window_icon() -> Option<std::sync::Arc<egui::IconData>> {
+    let bytes = include_bytes!("../icon.png");
+    match eframe::icon_data::from_png_bytes(bytes) {
+        Ok(data) => Some(std::sync::Arc::new(data)),
+        Err(error) => {
+            eprintln!("Could not load window icon: {error}");
+            None
+        }
+    }
+}
+
+pub fn native_options(settings: &crate::storage::Settings) -> eframe::NativeOptions {
+    let icon = load_window_icon();
+    let mut viewport = egui::ViewportBuilder::default()
+        .with_inner_size([900.0, 700.0])
+        .with_title("Pomodoro Focus")
+        .with_visible(!settings.start_minimized);
+    if let Some(icon) = icon {
+        viewport = viewport.with_icon(icon);
+    }
     eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default()
-            .with_inner_size([900.0, 700.0])
-            .with_title("Pomodoro Focus"),
+        viewport,
         ..Default::default()
     }
 }

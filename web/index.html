@@ -32,14 +32,10 @@ main{width:min(100% - 28px,480px);margin:0 auto;padding:28px 0 56px}
 h1{font-size:1.35rem;margin:6px 0 22px;font-weight:600;letter-spacing:-.01em}
 .card{
   background:color-mix(in srgb,var(--panel) 94%,transparent);
-  border:1px solid var(--border);
-  border-radius:var(--radius);
-  padding:22px;
-  margin:14px 0;
-  backdrop-filter:blur(8px);
+  border:1px solid var(--border);border-radius:var(--radius);
+  padding:22px;margin:14px 0;backdrop-filter:blur(8px);
   transition:border-color .3s ease;
 }
-
 .timer{text-align:center;padding:30px 22px 24px}
 .mode{display:inline-flex;align-items:center;gap:8px;color:var(--accent);font-size:.72rem;letter-spacing:.2em;font-weight:700;transition:color .4s ease}
 .mode .dot{width:8px;height:8px;border-radius:50%;background:currentColor;box-shadow:0 0 0 0 currentColor;animation:pulse 2s infinite}
@@ -48,42 +44,29 @@ h1{font-size:1.35rem;margin:6px 0 22px;font-weight:600;letter-spacing:-.01em}
 .ring-wrap svg{width:100%;height:100%;transform:rotate(-90deg)}
 .ring-track{fill:none;stroke:var(--border);stroke-width:6}
 .ring-fill{fill:none;stroke:var(--accent);stroke-width:6;stroke-linecap:round;transition:stroke-dashoffset .9s linear,stroke .4s ease}
-.clock{
-  position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
-  font-size:clamp(3.2rem,16vw,4.6rem);font-weight:200;letter-spacing:-.06em;
-  font-variant-numeric:tabular-nums;line-height:1;
-}
+.clock{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:clamp(3.2rem,16vw,4.6rem);font-weight:200;letter-spacing:-.06em;font-variant-numeric:tabular-nums;line-height:1}
 .today{color:var(--muted);font-size:.88rem;margin-top:4px}
-
 .buttons{display:flex;gap:10px;margin-top:20px}
 .buttons button{flex:1}
 .button{
-  border:0;border-radius:20px;padding:13px 16px;
-  background:var(--border);color:var(--text);
-  font-weight:650;font-size:.95rem;font-family:inherit;
-  cursor:pointer;transition:transform .08s ease,background .2s ease,opacity .2s ease;
+  border:0;border-radius:20px;padding:13px 16px;background:var(--border);color:var(--text);
+  font-weight:650;font-size:.95rem;font-family:inherit;cursor:pointer;
+  transition:transform .08s ease,background .2s ease,opacity .2s ease;
   text-decoration:none;text-align:center;
   display:inline-flex;align-items:center;justify-content:center;
 }
-.button.primary{background:var(--accent);color:#202124;transition:background .4s ease,transform .08s ease}
+.button.primary{background:var(--accent);color:#202124}
 .button.ghost{background:transparent;border:1px solid var(--border);color:var(--muted)}
 .button.danger{background:transparent;border:1px solid var(--accent);color:var(--accent)}
 .button:active{transform:scale(.97)}
 .button:disabled{opacity:.45;cursor:not-allowed}
 .button.wide{width:100%}
-.button.small{padding:8px 12px;font-size:.82rem}
-
 .stats{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:16px;padding-top:16px;border-top:1px solid var(--border)}
 .stat{text-align:center}
 .stat .v{font-size:1.15rem;font-weight:600;font-variant-numeric:tabular-nums}
 .stat .l{color:var(--muted);font-size:.68rem;letter-spacing:.12em;text-transform:uppercase;margin-top:2px}
-
 label{display:block;color:var(--muted);font-size:.8rem;margin:12px 0 6px;font-weight:500}
-input:not([type=checkbox]):not([type=range]){
-  width:100%;padding:12px 14px;border:1px solid var(--border);
-  border-radius:12px;background:var(--bg2);color:var(--text);
-  font:inherit;font-size:16px;transition:border-color .2s ease;
-}
+input:not([type=checkbox]):not([type=range]){width:100%;padding:12px 14px;border:1px solid var(--border);border-radius:12px;background:var(--bg2);color:var(--text);font:inherit;font-size:16px;transition:border-color .2s ease}
 input:focus{outline:none;border-color:var(--accent)}
 .check-row{display:flex;align-items:center;gap:10px;margin:14px 0 0;cursor:pointer}
 .check-row input{width:18px;height:18px;accent-color:var(--accent);cursor:pointer}
@@ -91,60 +74,53 @@ input:focus{outline:none;border-color:var(--accent)}
 .grid{display:grid;grid-template-columns:1fr 1fr;gap:4px 12px}
 .token{display:flex;gap:8px}
 .token input{flex:1}
-
 .notes-list{margin-top:12px;display:flex;flex-direction:column;gap:8px}
-.note{
-  background:var(--bg2);border:1px solid var(--border);border-radius:16px;
-  padding:12px 14px;display:flex;flex-direction:column;gap:6px;
-}
+.note{background:var(--bg2);border:1px solid var(--border);border-radius:16px;padding:12px 14px;display:flex;flex-direction:column;gap:6px}
 .note .head{display:flex;justify-content:space-between;align-items:center;gap:8px}
-.note .subject{
-  display:inline-block;padding:2px 9px;border-radius:99px;
-  background:color-mix(in srgb,var(--good) 20%,transparent);
-  color:var(--good);font-size:.7rem;font-weight:600;letter-spacing:.04em;
-}
+.note .subject{display:inline-block;padding:2px 9px;border-radius:99px;background:color-mix(in srgb,var(--good) 20%,transparent);color:var(--good);font-size:.7rem;font-weight:600;letter-spacing:.04em}
 .note .when{color:var(--muted);font-size:.72rem;font-variant-numeric:tabular-nums}
 .note .body{font-size:.9rem;line-height:1.4;word-break:break-word}
 .note .footer{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-top:2px}
 .note .dur{color:var(--muted);font-size:.72rem}
 .note .actions{display:flex;gap:6px}
-.note .icon-btn{
-  background:transparent;border:1px solid var(--border);color:var(--muted);
-  border-radius:10px;padding:5px 9px;font-size:.72rem;font-weight:600;
-  cursor:pointer;font-family:inherit;
-}
-.note .icon-btn:active{transform:scale(.96)}
+.note .icon-btn{background:transparent;border:1px solid var(--border);color:var(--muted);border-radius:10px;padding:5px 9px;font-size:.72rem;font-weight:600;cursor:pointer;font-family:inherit}
 .note .icon-btn.danger{color:var(--accent);border-color:color-mix(in srgb,var(--accent) 50%,var(--border))}
 .note-editing{background:var(--panel2)}
 .note-editing .edit-fields{display:flex;flex-direction:column;gap:6px;margin-top:6px}
 .empty{color:var(--muted);font-size:.85rem;text-align:center;padding:14px 0}
-.note-toast{
-  position:fixed;left:50%;bottom:calc(78px + env(safe-area-inset-bottom));
-  transform:translateX(-50%);background:var(--panel2);
-  border:1px solid var(--border);border-radius:12px;padding:10px 14px;
-  font-size:.82rem;opacity:0;transition:opacity .2s ease;pointer-events:none;
-  z-index:45;
-}
+.note-toast{position:fixed;left:50%;bottom:calc(78px + env(safe-area-inset-bottom));transform:translateX(-50%);background:var(--panel2);border:1px solid var(--border);border-radius:12px;padding:10px 14px;font-size:.82rem;opacity:0;transition:opacity .2s ease;pointer-events:none;z-index:45}
 .note-toast.show{opacity:1}
-
 .toasts{position:fixed;left:50%;bottom:calc(20px + env(safe-area-inset-bottom));transform:translateX(-50%);display:flex;flex-direction:column;gap:8px;z-index:50;pointer-events:none;width:min(100% - 32px,420px)}
-.toast{
-  background:var(--panel2);border:1px solid var(--border);border-left:3px solid var(--good);
-  border-radius:12px;padding:11px 14px;font-size:.88rem;
-  box-shadow:0 10px 30px rgba(0,0,0,.4);
-  animation:slideup .25s ease;pointer-events:auto;
-}
+.toast{background:var(--panel2);border:1px solid var(--border);border-left:3px solid var(--good);border-radius:12px;padding:11px 14px;font-size:.88rem;box-shadow:0 10px 30px rgba(0,0,0,.4);animation:slideup .25s ease;pointer-events:auto}
 .toast.error{border-left-color:var(--accent)}
 .toast.warn{border-left-color:var(--warn)}
 @keyframes slideup{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
 
+#goal-bar{margin-top:10px}
+#goal-fill{transition:width .4s ease,background .3s ease}
+
+.slider{
+  position:relative;height:56px;margin-top:12px;
+  background:var(--bg2);border:1px solid var(--border);border-radius:20px;
+  overflow:hidden;user-select:none;touch-action:pan-y;
+  display:flex;align-items:center;justify-content:center;
+}
+.slider-fill{position:absolute;inset:0;width:0%;background:linear-gradient(90deg,#8a4444,#c0392b);transition:width .05s linear}
+.slider-knob{
+  position:absolute;top:4px;left:4px;width:48px;height:48px;
+  background:#1a1a1a;border:1px solid #666;border-radius:16px;
+  display:flex;align-items:center;justify-content:center;
+  font-size:20px;color:#f28b82;cursor:grab;z-index:2;
+  transition:left .15s ease;
+}
+.slider-knob:active{cursor:grabbing}
+.slider-label{position:relative;z-index:1;color:var(--muted);font-weight:600;pointer-events:none}
+
+#power-banner{display:none;border-color:#8a4444;background:#2a1616}
+
 body.offline{filter:saturate(.4)}
 body.offline .mode .dot{animation:none;background:var(--muted)}
-body.flash::before{
-  content:"";position:fixed;inset:0;background:var(--accent);
-  opacity:.3;pointer-events:none;z-index:40;
-  animation:flash .8s ease forwards;
-}
+body.flash::before{content:"";position:fixed;inset:0;background:var(--accent);opacity:.3;pointer-events:none;z-index:40;animation:flash .8s ease forwards}
 @keyframes flash{from{opacity:.3}to{opacity:0}}
 </style>
 </head>
@@ -164,6 +140,13 @@ body.flash::before{
       <div class="clock" id="clock">--:--</div>
     </div>
     <div class="today" id="today">Today · 0m</div>
+    <div id="goal-bar" style="display:none">
+      <div style="height:6px;background:var(--border);border-radius:3px;overflow:hidden">
+        <div id="goal-fill" style="height:100%;width:0%;background:var(--accent)"></div>
+      </div>
+      <div id="goal-label" class="today" style="font-size:.72rem;margin-top:4px;letter-spacing:.12em"></div>
+    </div>
+    <div id="break-suggestion" class="today" style="display:none;margin-top:8px;font-style:italic"></div>
 
     <div class="buttons">
       <button class="button primary" id="toggle">Start</button>
@@ -195,9 +178,7 @@ body.flash::before{
 
   <section class="card">
     <div class="eyebrow">Export data</div>
-    <p class="today" style="margin-top:6px">
-      Download your history and notes. The PIN is sent as a query parameter, so links open directly in your browser.
-    </p>
+    <p class="today" style="margin-top:6px">Download your history and notes.</p>
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:14px">
       <a class="button ghost" id="export-history" target="_blank" rel="noopener">History CSV</a>
       <a class="button ghost" id="export-notes" target="_blank" rel="noopener">Notes CSV</a>
@@ -227,6 +208,13 @@ body.flash::before{
       <div><label>Long break · min</label><input id="long" type="number" min="1" max="120" inputmode="numeric"></div>
       <div><label>Sessions</label><input id="sessions" type="number" min="1" max="12" inputmode="numeric"></div>
     </div>
+    <div class="grid" style="margin-top:8px">
+      <div><label>Daily goal · min (0 = off)</label><input id="goal" type="number" min="0" max="720" inputmode="numeric"></div>
+    </div>
+    <label class="check-row"><input id="auto-start" type="checkbox"><span>Auto-start next session</span></label>
+    <label class="check-row"><input id="power-control" type="checkbox"><span>Allow remote shutdown/restart/lock</span></label>
+    <label class="check-row"><input id="start-minimized" type="checkbox"><span>Start minimized to tray</span></label>
+    <label class="check-row"><input id="close-to-tray" type="checkbox"><span>Always minimize to tray on close</span></label>
     <label class="check-row"><input id="escape-enabled" type="checkbox"><span>Allow Esc to toggle fullscreen</span></label>
     <button class="button primary wide" style="margin-top:14px" onclick="saveSettings()">Save settings</button>
   </section>
@@ -236,6 +224,33 @@ body.flash::before{
     <p id="alt-tab-description" class="today" style="margin-top:6px">Block Alt+Tab, Win+Tab, and taskbar app switching while Pomodoro Focus is running.</p>
     <button id="alt-tab-toggle" class="button primary wide" style="margin-top:14px" onclick="toggleAltTab()">Disable app switching</button>
   </section>
+
+  <details class="card" id="power-card" style="display:none">
+    <summary class="eyebrow" style="cursor:pointer;list-style:none">Power · tap to open</summary>
+    <p class="today" style="margin-top:10px">
+      Shutdown and restart have a 30-second delay. Cancel from the banner if you change your mind.
+    </p>
+
+    <div class="slider" id="shutdown-slider" data-action="shutdown">
+      <div class="slider-fill"></div>
+      <div class="slider-knob">⏻</div>
+      <div class="slider-label">Slide to shut down</div>
+    </div>
+
+    <div class="slider" id="restart-slider" data-action="restart">
+      <div class="slider-fill"></div>
+      <div class="slider-knob">⟳</div>
+      <div class="slider-label">Slide to restart</div>
+    </div>
+
+    <button class="button wide" style="margin-top:14px" onclick="lockScreen()">Lock screen</button>
+  </details>
+
+  <div id="power-banner" class="card">
+    <div class="eyebrow" style="color:#f28b82">PENDING</div>
+    <p id="power-banner-text" class="today" style="margin-top:6px"></p>
+    <button class="button danger wide" style="margin-top:10px" onclick="cancelPower()">Cancel</button>
+  </div>
 </main>
 
 <div class="note-toast" id="note-toast"></div>
@@ -252,6 +267,7 @@ let loaded=false;
 let lastMode=null;
 let lastRunning=null;
 let pollTimer=null;
+let undoTimer=null;
 
 let editingId=null;
 let editDraft={accomplishment:"",subject:""};
@@ -318,7 +334,12 @@ async function saveSettings(){
       short_break_minutes:+$("short").value,
       long_break_minutes:+$("long").value,
       sessions_before_long_break:+$("sessions").value,
-      escape_exits_fullscreen:$("escape-enabled").checked
+      start_minimized:$("start-minimized").checked,
+      close_to_tray:$("close-to-tray").checked,
+      escape_exits_fullscreen:$("escape-enabled").checked,
+      auto_start_next:$("auto-start").checked,
+      daily_goal_minutes:+$("goal").value,
+      remote_power_control:$("power-control").checked,
     });
     toast("Settings saved");
   }catch(e){toast(e.message,"error")}
@@ -360,9 +381,35 @@ async function deleteNote(id){
       editDraft={accomplishment:"",subject:""};
     }
     noteToast("Note deleted");
+    showUndoToast();
     lastNoteSignature="";
     refresh();
   }catch(e){toast(e.message,"error")}
+}
+
+async function undoDelete(){
+  const el=document.getElementById("undo-toast");
+  if(el)el.remove();
+  if(undoTimer)clearTimeout(undoTimer);
+  try{
+    await post("/notes/undo-delete",{});
+    noteToast("Note restored");
+    lastNoteSignature="";
+    refresh();
+  }catch(e){toast(e.message,"error")}
+}
+
+function showUndoToast(){
+  if(undoTimer)clearTimeout(undoTimer);
+  const existing=document.getElementById("undo-toast");
+  if(existing)existing.remove();
+  const el=document.createElement("div");
+  el.id="undo-toast";
+  el.className="toast";
+  el.style.pointerEvents="auto";
+  el.innerHTML='Note deleted <button class="icon-btn" style="margin-left:8px" onclick="undoDelete()">Undo</button>';
+  $("toasts").appendChild(el);
+  undoTimer=setTimeout(()=>el.remove(),30000);
 }
 
 function beginEdit(id){
@@ -414,11 +461,9 @@ function renderNotes(notes){
     list.innerHTML='<div class="empty">No notes yet.</div>';
     return;
   }
-
   const active=document.activeElement;
   const activeId=active&&active.id?active.id:null;
-  const selectionStart=
-    active&&"selectionStart" in active ? active.selectionStart : null;
+  const selectionStart=active&&"selectionStart" in active ? active.selectionStart : null;
 
   list.innerHTML=lastNotes.slice(0,8).map(n=>{
     if(editingId===n.id){
@@ -474,6 +519,106 @@ function updateExportLinks(){
   $("export-all-json").href=`/export/all.json${qs}`;
 }
 
+function renderGoal(s){
+  const bar=$("goal-bar");
+  if(!s.daily_goal_minutes||s.daily_goal_minutes<=0){
+    bar.style.display="none";
+    return;
+  }
+  bar.style.display="block";
+  const pct=Math.round((s.daily_goal_progress||0)*100);
+  const fill=$("goal-fill");
+  fill.style.width=pct+"%";
+  fill.style.background=(s.daily_goal_progress||0)>=1?"#81c995":"var(--accent)";
+  $("goal-label").textContent=
+    "GOAL · "+fmtDuration(s.today_total_seconds)+" / "+fmtDuration(s.daily_goal_minutes*60);
+}
+
+function renderBreakSuggestion(s){
+  const el=$("break-suggestion");
+  if(s.mode==="study"||!s.break_suggestion){
+    el.style.display="none";
+    return;
+  }
+  el.style.display="block";
+  el.textContent="💡 "+s.break_suggestion;
+}
+
+function confirmPowerAction(action){
+  const verb=action==="shutdown"?"shut down":"restart";
+  if(!confirm(`Really ${verb} in 30 seconds?`))return;
+  post("/system/"+action,{confirm:true})
+    .then(()=>toast(`${verb[0].toUpperCase()+verb.slice(1)} scheduled in 30s`))
+    .catch(e=>toast(e.message,"error"));
+}
+
+function lockScreen(){
+  post("/system/lock",{})
+    .then(()=>toast("Screen locked"))
+    .catch(e=>toast(e.message,"error"));
+}
+
+function cancelPower(){
+  post("/system/cancel",{})
+    .then(()=>toast("Cancelled"))
+    .catch(e=>toast(e.message,"error"));
+}
+
+function setupSlider(el){
+  const action=el.dataset.action;
+  const knob=el.querySelector(".slider-knob");
+  const fill=el.querySelector(".slider-fill");
+  let dragging=false;
+  let progress=0;
+
+  function update(x){
+    const trackWidth=el.clientWidth-8-knob.clientWidth;
+    const relX=x-el.getBoundingClientRect().left-4-knob.clientWidth/2;
+    progress=Math.max(0,Math.min(1,relX/trackWidth));
+    knob.style.left=(4+progress*trackWidth)+"px";
+    fill.style.width=(progress*100)+"%";
+  }
+
+  function reset(){
+    dragging=false;
+    progress=0;
+    knob.style.left="4px";
+    fill.style.width="0%";
+  }
+
+  function finish(){
+    if(progress>=0.95){
+      reset();
+      confirmPowerAction(action);
+    }else{
+      reset();
+    }
+  }
+
+  knob.addEventListener("pointerdown",e=>{
+    dragging=true;
+    knob.setPointerCapture(e.pointerId);
+    e.preventDefault();
+  });
+
+  knob.addEventListener("pointermove",e=>{
+    if(!dragging)return;
+    update(e.clientX);
+  });
+
+  knob.addEventListener("pointerup",e=>{
+    if(!dragging)return;
+    knob.releasePointerCapture(e.pointerId);
+    finish();
+  });
+
+  knob.addEventListener("pointercancel",()=>{
+    if(dragging)reset();
+  });
+}
+
+document.querySelectorAll(".slider").forEach(setupSlider);
+
 function applyMode(mode){
   const accent=colors[mode]||colors.study;
   document.documentElement.style.setProperty("--accent",accent);
@@ -484,7 +629,6 @@ function applyMode(mode){
 async function refresh(){
   try{
     const s=await(await fetch("/status")).json();
-
     document.body.classList.remove("offline");
 
     if(lastMode!==null && lastMode!==s.mode){
@@ -497,6 +641,8 @@ async function refresh(){
 
     $("clock").textContent=fmtClock(s.remaining_seconds);
     $("today").textContent="Today · "+fmtDuration(s.today_total_seconds);
+    renderGoal(s);
+    renderBreakSuggestion(s);
 
     const total=s.mode==="study"?s.study_minutes*60
               :s.mode==="short_break"?s.short_break_minutes*60
@@ -505,7 +651,7 @@ async function refresh(){
     const fraction=total>0?Math.min(1,Math.max(0,1-s.remaining_seconds/total)):0;
     $("ring").style.strokeDashoffset=String(circumference*(1-fraction));
 
-    if(lastRunning!==s.running||$("toggle").textContent.trim()==="") {
+    if(lastRunning!==s.running||$("toggle").textContent.trim()===""){
       $("toggle").textContent=s.running?"Pause":"Start focus";
     }
     lastRunning=s.running;
@@ -530,11 +676,16 @@ async function refresh(){
       "Block Alt+Tab, Win+Tab, and taskbar app switching while Pomodoro Focus is running.";
 
     if(!loaded){
+      $("start-minimized").checked=s.start_minimized;
+      $("close-to-tray").checked=s.close_to_tray;
       $("study").value=s.study_minutes;
       $("short").value=s.short_break_minutes;
       $("long").value=s.long_break_minutes;
       $("sessions").value=s.sessions_before_long_break;
+      $("goal").value=s.daily_goal_minutes;
+      $("auto-start").checked=s.auto_start_next;
       $("escape-enabled").checked=s.escape_exits_fullscreen;
+      $("power-control").checked=s.power_control_available;
       loaded=true;
     }
 
@@ -546,6 +697,18 @@ async function refresh(){
       }
     }else{
       lastNotes=s.notes||[];
+    }
+
+    $("power-control").checked=!!s.power_control_available;
+    $("power-card").style.display=s.power_control_available?"block":"none";
+
+    const banner=$("power-banner");
+    if(s.pending_power_seconds&&s.pending_power_seconds>0&&s.pending_power_action){
+      banner.style.display="block";
+      const verb=s.pending_power_action==="shutdown"?"Shutdown":"Restart";
+      $("power-banner-text").textContent=`${verb} in ${s.pending_power_seconds}s`;
+    }else{
+      banner.style.display="none";
     }
 
     updateExportLinks();

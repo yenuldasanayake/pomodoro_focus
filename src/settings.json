@@ -1,0 +1,16 @@
+{
+  "study_minutes": 25,
+  "short_break_minutes": 5,
+  "long_break_minutes": 15,
+  "sessions_before_long_break": 4,
+  "escape_exits_fullscreen": true,
+  "block_alt_tab": false,
+  "sites_blocked": false,
+  "pin": "35978710",
+  "port": 50409,
+  "auto_start_next": false,
+  "daily_goal_minutes": 0,
+  "remote_power_control": true,
+  "start_minimized": true,
+  "close_to_tray": true
+}

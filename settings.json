@@ -7,5 +7,10 @@
   "block_alt_tab": false,
   "sites_blocked": true,
   "pin": "80455052",
-  "port": 56987
+  "port": 56987,
+  "auto_start_next": false,
+  "daily_goal_minutes": 0,
+  "remote_power_control": true,
+  "start_minimized": true,
+  "close_to_tray": true
 }

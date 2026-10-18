@@ -1,5 +1,5 @@
 use crate::{
-    alt_tab, audio, export, site_blocker,
+    alt_tab, audio, breaks, export, site_blocker, system,
     storage::{generate_id, History, Notes, Settings, Storage, StudyNote},
     timer::{Mode, Timer},
 };
@@ -29,6 +29,21 @@ const AUTH_WINDOW: Duration = Duration::from_secs(60);
 const AUTH_LOCKOUT: Duration = Duration::from_secs(60);
 const AUTH_MAX_FAILURES: u32 = 5;
 const AUTH_RECORD_TTL: Duration = Duration::from_secs(300);
+const UNDO_WINDOW: Duration = Duration::from_secs(30);
+const POWER_ACTION_DELAY_SECS: u32 = 30;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PowerAction {
+    Shutdown,
+    Restart,
+}
+
+#[derive(Debug, Clone)]
+pub struct PendingPowerAction {
+    pub action: PowerAction,
+    pub deadline: Instant,
+}
 
 pub struct AppState {
     pub settings: Settings,
@@ -45,10 +60,13 @@ pub struct AppState {
     pub alt_tab_error: Option<String>,
     pub server_error: Option<String>,
     pub pending_note_duration: Option<u64>,
+    pub pending_power_action: Option<PendingPowerAction>,
+    pub should_restore_window: bool,
     pub error_message: Option<String>,
     pub ctx: egui::Context,
     pub storage: Storage,
     auth: AuthState,
+    undo_deleted_notes: Vec<(Instant, StudyNote)>,
     history_dirty: bool,
     last_history_flush: Instant,
 }
@@ -179,16 +197,54 @@ impl AppState {
             alt_tab_error,
             server_error: None,
             pending_note_duration: None,
+            pending_power_action: None,
+            should_restore_window: false,
             error_message,
             ctx,
             storage,
             auth: AuthState::default(),
+            undo_deleted_notes: Vec::new(),
             history_dirty: false,
             last_history_flush: Instant::now(),
         })
     }
 
+    pub fn undo_available(&self) -> bool {
+        self.undo_deleted_notes
+            .last()
+            .is_some_and(|(when, _)| when.elapsed() < UNDO_WINDOW)
+    }
+
+    pub fn power_control_available(&self) -> bool {
+        self.settings.remote_power_control
+    }
+
+    pub fn pending_power_seconds(&self) -> Option<u32> {
+        self.pending_power_action
+            .as_ref()
+            .map(|p| {
+                p.deadline
+                    .saturating_duration_since(Instant::now())
+                    .as_secs() as u32
+            })
+            .filter(|&s| s > 0)
+    }
+
     pub fn tick(&mut self) {
+        let now = Instant::now();
+
+        if let Some(pending) = &self.pending_power_action {
+            if now >= pending.deadline {
+                self.pending_power_action = None;
+            }
+        }
+        if self.pending_power_action.is_some() {
+            self.ctx.request_repaint_after(Duration::from_millis(500));
+        }
+
+        self.undo_deleted_notes
+            .retain(|(when, _)| now.duration_since(*when) < UNDO_WINDOW);
+
         let completed = self.timer.update(&self.settings);
 
         let studied = self.timer.take_study_seconds();
@@ -207,6 +263,11 @@ impl AppState {
                 self.pending_note_duration = Some(u64::from(self.settings.study_minutes) * 60);
             }
             self.flush_history();
+
+            if self.settings.auto_start_next {
+                self.timer.start();
+            }
+
             self.ctx.request_repaint();
         }
     }
@@ -239,10 +300,21 @@ impl AppState {
     pub fn execute_command(&mut self, command: &str) -> Result<(), String> {
         self.tick();
         match command {
-            "start" => self.timer.start(),
+            "start" => {
+                self.timer.start();
+                self.should_restore_window = true;
+            }
             "pause" => self.timer.pause(),
             "reset" => self.timer.reset(&self.settings),
-            "skip" => self.timer.skip(&self.settings),
+            "skip" => {
+                let studied = self.timer.take_study_seconds();
+                if studied > 0 {
+                    self.history.add_today(studied);
+                    self.history_dirty = true;
+                    self.flush_history();
+                }
+                self.timer.skip(&self.settings);
+            }
             _ => return Err("Command must be start, pause, reset, or skip".to_owned()),
         }
         self.collect_study_time();
@@ -253,6 +325,10 @@ impl AppState {
     pub fn update_settings(&mut self, mut settings: Settings) -> Result<(), String> {
         self.tick();
         settings.sanitize();
+        // Preserve fields the desktop and phone UIs share but don't both
+        // display, so a phone save doesn't clobber desktop-only fields and
+        // vice versa. The two tray fields are NOT in this list because both
+        // UIs expose them and the incoming value wins.
         settings.block_alt_tab = self.settings.block_alt_tab;
         settings.sites_blocked = self.settings.sites_blocked;
         settings.pin = self.settings.pin.clone();
@@ -377,6 +453,29 @@ impl AppState {
             self.notes.entries.insert(index, removed);
             return Err(format!("Could not delete study note: {error}"));
         }
+        self.undo_deleted_notes.push((Instant::now(), removed));
+        self.ctx.request_repaint();
+        Ok(())
+    }
+
+    pub fn undo_delete_note(&mut self) -> Result<(), String> {
+        let now = Instant::now();
+        let Some((when, note)) = self.undo_deleted_notes.pop() else {
+            return Err("Nothing to undo".to_owned());
+        };
+
+        if now.duration_since(when) >= UNDO_WINDOW {
+            self.undo_deleted_notes.push((when, note));
+            return Err("Undo window expired".to_owned());
+        }
+
+        let mut trial = self.notes.entries.clone();
+        trial.push(note.clone());
+        if let Err(error) = self.storage.save_notes(&Notes { entries: trial }) {
+            self.undo_deleted_notes.push((when, note));
+            return Err(format!("Could not restore study note: {error}"));
+        }
+        self.notes.entries.push(note);
         self.ctx.request_repaint();
         Ok(())
     }
@@ -483,6 +582,66 @@ impl AppState {
         Ok(())
     }
 
+    pub fn trigger_shutdown(&mut self) -> Result<(), String> {
+        if !self.power_control_available() {
+            return Err("Remote power control is disabled".to_owned());
+        }
+        if self.pending_power_action.is_some() {
+            return Err("A power action is already pending".to_owned());
+        }
+        system::shutdown(POWER_ACTION_DELAY_SECS)
+            .map_err(|error| format!("Could not schedule shutdown: {error}"))?;
+        self.pending_power_action = Some(PendingPowerAction {
+            action: PowerAction::Shutdown,
+            deadline: Instant::now() + Duration::from_secs(u64::from(POWER_ACTION_DELAY_SECS)),
+        });
+        self.error_message = Some(format!(
+            "Shutdown in {POWER_ACTION_DELAY_SECS}s — cancel from the phone or this app"
+        ));
+        self.ctx.request_repaint();
+        Ok(())
+    }
+
+    pub fn trigger_restart(&mut self) -> Result<(), String> {
+        if !self.power_control_available() {
+            return Err("Remote power control is disabled".to_owned());
+        }
+        if self.pending_power_action.is_some() {
+            return Err("A power action is already pending".to_owned());
+        }
+        system::restart(POWER_ACTION_DELAY_SECS)
+            .map_err(|error| format!("Could not schedule restart: {error}"))?;
+        self.pending_power_action = Some(PendingPowerAction {
+            action: PowerAction::Restart,
+            deadline: Instant::now() + Duration::from_secs(u64::from(POWER_ACTION_DELAY_SECS)),
+        });
+        self.error_message = Some(format!(
+            "Restart in {POWER_ACTION_DELAY_SECS}s — cancel from the phone or this app"
+        ));
+        self.ctx.request_repaint();
+        Ok(())
+    }
+
+    pub fn trigger_lock(&mut self) -> Result<(), String> {
+        if !self.power_control_available() {
+            return Err("Remote power control is disabled".to_owned());
+        }
+        system::lock_screen().map_err(|error| format!("Could not lock screen: {error}"))?;
+        self.ctx.request_repaint();
+        Ok(())
+    }
+
+    pub fn cancel_power_action(&mut self) -> Result<(), String> {
+        if self.pending_power_action.is_none() {
+            return Err("No power action pending".to_owned());
+        }
+        system::cancel_pending().map_err(|error| format!("Could not cancel: {error}"))?;
+        self.pending_power_action = None;
+        self.error_message = Some("Power action cancelled".to_owned());
+        self.ctx.request_repaint();
+        Ok(())
+    }
+
     fn collect_study_time(&mut self) {
         let studied = self.timer.take_study_seconds();
         if studied > 0 {
@@ -546,10 +705,15 @@ pub fn build_router(state: SharedState) -> Router {
         .route("/notes", post(add_note))
         .route("/notes/update", post(update_note))
         .route("/notes/delete", post(delete_note))
+        .route("/notes/undo-delete", post(undo_delete_note))
         .route("/export/history.csv", get(export_history_csv))
         .route("/export/notes.csv", get(export_notes_csv))
         .route("/export/all.csv", get(export_all_csv))
         .route("/export/all.json", get(export_all_json))
+        .route("/system/shutdown", post(power_shutdown))
+        .route("/system/restart", post(power_restart))
+        .route("/system/lock", post(power_lock))
+        .route("/system/cancel", post(power_cancel))
         .with_state(state)
 }
 
@@ -703,6 +867,16 @@ struct StatusResponse {
     current_streak: u32,
     completed_sessions: u32,
     notes: Vec<NoteSummary>,
+    auto_start_next: bool,
+    daily_goal_minutes: u32,
+    daily_goal_progress: Option<f32>,
+    break_suggestion: Option<String>,
+    undo_available: bool,
+    power_control_available: bool,
+    pending_power_action: Option<PowerAction>,
+    pending_power_seconds: Option<u32>,
+    start_minimized: bool,
+    close_to_tray: bool,
 }
 
 async fn status(State(shared): State<SharedState>) -> Result<Json<StatusResponse>, ApiError> {
@@ -710,6 +884,25 @@ async fn status(State(shared): State<SharedState>) -> Result<Json<StatusResponse
         .lock()
         .map_err(|_| ApiError::internal("App state is unavailable"))?;
     state.tick();
+
+    let today_seconds = state.history.today_seconds();
+    let goal_minutes = state.settings.daily_goal_minutes;
+    let goal_progress = if goal_minutes > 0 {
+        Some((today_seconds as f32 / (goal_minutes as f32 * 60.0)).min(1.0))
+    } else {
+        None
+    };
+
+    let break_suggestion = breaks::current_suggestion(
+        state.timer.mode,
+        state.timer.elapsed_in_mode,
+    )
+    .map(|s| s.to_owned());
+
+    let undo_available = state.undo_available();
+    let power_control_available = state.power_control_available();
+    let pending_power_action = state.pending_power_action.as_ref().map(|p| p.action);
+    let pending_power_seconds = state.pending_power_seconds();
 
     let notes: Vec<NoteSummary> = state
         .notes
@@ -723,7 +916,7 @@ async fn status(State(shared): State<SharedState>) -> Result<Json<StatusResponse
     Ok(Json(StatusResponse {
         remaining_seconds: state.timer.remaining_seconds,
         mode: state.timer.mode,
-        today_total_seconds: state.history.today_seconds(),
+        today_total_seconds: today_seconds,
         running: state.timer.running,
         study_minutes: state.settings.study_minutes,
         short_break_minutes: state.settings.short_break_minutes,
@@ -737,6 +930,16 @@ async fn status(State(shared): State<SharedState>) -> Result<Json<StatusResponse
         current_streak: state.history.current_streak(),
         completed_sessions: state.timer.completed_study_sessions,
         notes,
+        auto_start_next: state.settings.auto_start_next,
+        daily_goal_minutes: goal_minutes,
+        daily_goal_progress: goal_progress,
+        break_suggestion,
+        undo_available,
+        power_control_available,
+        pending_power_action,
+        pending_power_seconds,
+        start_minimized: state.settings.start_minimized,
+        close_to_tray: state.settings.close_to_tray,
     }))
 }
 
@@ -757,10 +960,7 @@ async fn export_history_csv(
     state.tick();
     let body = export::history_csv(&state.history);
     Ok((
-        [(
-            header::CONTENT_TYPE,
-            "text/csv; charset=utf-8",
-        )],
+        [(header::CONTENT_TYPE, "text/csv; charset=utf-8")],
         [(
             header::CONTENT_DISPOSITION,
             "attachment; filename=\"history.csv\"",
@@ -781,10 +981,7 @@ async fn export_notes_csv(
     state.tick();
     let body = export::notes_csv(&state.notes);
     Ok((
-        [(
-            header::CONTENT_TYPE,
-            "text/csv; charset=utf-8",
-        )],
+        [(header::CONTENT_TYPE, "text/csv; charset=utf-8")],
         [(
             header::CONTENT_DISPOSITION,
             "attachment; filename=\"notes.csv\"",
@@ -805,10 +1002,7 @@ async fn export_all_csv(
     state.tick();
     let body = export::all_csv(&state.history, &state.notes);
     Ok((
-        [(
-            header::CONTENT_TYPE,
-            "text/csv; charset=utf-8",
-        )],
+        [(header::CONTENT_TYPE, "text/csv; charset=utf-8")],
         [(
             header::CONTENT_DISPOSITION,
             "attachment; filename=\"all.csv\"",
@@ -829,10 +1023,7 @@ async fn export_all_json(
     state.tick();
     let body = export::all_json(&state.history, &state.notes);
     Ok((
-        [(
-            header::CONTENT_TYPE,
-            "application/json; charset=utf-8",
-        )],
+        [(header::CONTENT_TYPE, "application/json; charset=utf-8")],
         [(
             header::CONTENT_DISPOSITION,
             "attachment; filename=\"all.json\"",
@@ -873,6 +1064,16 @@ struct SettingsRequest {
     long_break_minutes: u32,
     sessions_before_long_break: u32,
     escape_exits_fullscreen: bool,
+    #[serde(default)]
+    auto_start_next: bool,
+    #[serde(default)]
+    daily_goal_minutes: u32,
+    #[serde(default)]
+    remote_power_control: bool,
+    #[serde(default)]
+    start_minimized: bool,
+    #[serde(default)]
+    close_to_tray: bool,
 }
 
 async fn update_settings(
@@ -894,6 +1095,11 @@ async fn update_settings(
         sites_blocked: state.settings.sites_blocked,
         pin: state.settings.pin.clone(),
         port: state.settings.port,
+        auto_start_next: request.auto_start_next,
+        daily_goal_minutes: request.daily_goal_minutes,
+        remote_power_control: request.remote_power_control,
+        start_minimized: request.start_minimized,
+        close_to_tray: request.close_to_tray,
     };
     state
         .update_settings(settings)
@@ -1038,6 +1244,113 @@ async fn delete_note(
     }))
 }
 
+#[derive(Deserialize)]
+struct TokenOnlyRequest {
+    token: String,
+}
+
+async fn undo_delete_note(
+    State(shared): State<SharedState>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    Json(request): Json<TokenOnlyRequest>,
+) -> Result<Json<MessageResponse>, ApiError> {
+    let mut state = shared
+        .lock()
+        .map_err(|_| ApiError::internal("App state is unavailable"))?;
+    verify_token(&mut state, addr.ip(), &request.token)?;
+    state.undo_delete_note().map_err(ApiError::bad_request)?;
+    Ok(Json(MessageResponse {
+        ok: true,
+        warning: None,
+    }))
+}
+
+#[derive(Deserialize)]
+struct PowerActionRequest {
+    token: String,
+    #[serde(default)]
+    confirm: bool,
+}
+
+async fn power_shutdown(
+    State(shared): State<SharedState>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    Json(request): Json<PowerActionRequest>,
+) -> Result<Json<MessageResponse>, ApiError> {
+    let mut state = shared
+        .lock()
+        .map_err(|_| ApiError::internal("App state is unavailable"))?;
+    verify_token(&mut state, addr.ip(), &request.token)?;
+    if !state.power_control_available() {
+        return Err(ApiError::forbidden("Remote power control is disabled"));
+    }
+    if !request.confirm {
+        return Err(ApiError::bad_request("Missing confirm=true".to_owned()));
+    }
+    state.trigger_shutdown().map_err(ApiError::internal)?;
+    Ok(Json(MessageResponse {
+        ok: true,
+        warning: None,
+    }))
+}
+
+async fn power_restart(
+    State(shared): State<SharedState>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    Json(request): Json<PowerActionRequest>,
+) -> Result<Json<MessageResponse>, ApiError> {
+    let mut state = shared
+        .lock()
+        .map_err(|_| ApiError::internal("App state is unavailable"))?;
+    verify_token(&mut state, addr.ip(), &request.token)?;
+    if !state.power_control_available() {
+        return Err(ApiError::forbidden("Remote power control is disabled"));
+    }
+    if !request.confirm {
+        return Err(ApiError::bad_request("Missing confirm=true".to_owned()));
+    }
+    state.trigger_restart().map_err(ApiError::internal)?;
+    Ok(Json(MessageResponse {
+        ok: true,
+        warning: None,
+    }))
+}
+
+async fn power_lock(
+    State(shared): State<SharedState>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    Json(request): Json<TokenOnlyRequest>,
+) -> Result<Json<MessageResponse>, ApiError> {
+    let mut state = shared
+        .lock()
+        .map_err(|_| ApiError::internal("App state is unavailable"))?;
+    verify_token(&mut state, addr.ip(), &request.token)?;
+    if !state.power_control_available() {
+        return Err(ApiError::forbidden("Remote power control is disabled"));
+    }
+    state.trigger_lock().map_err(ApiError::internal)?;
+    Ok(Json(MessageResponse {
+        ok: true,
+        warning: None,
+    }))
+}
+
+async fn power_cancel(
+    State(shared): State<SharedState>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    Json(request): Json<TokenOnlyRequest>,
+) -> Result<Json<MessageResponse>, ApiError> {
+    let mut state = shared
+        .lock()
+        .map_err(|_| ApiError::internal("App state is unavailable"))?;
+    verify_token(&mut state, addr.ip(), &request.token)?;
+    state.cancel_power_action().map_err(ApiError::bad_request)?;
+    Ok(Json(MessageResponse {
+        ok: true,
+        warning: None,
+    }))
+}
+
 fn verify_token(state: &mut AppState, ip: IpAddr, token: &str) -> Result<(), ApiError> {
     let now = Instant::now();
 
@@ -1080,6 +1393,10 @@ impl ApiError {
 
     fn unauthorized(message: &str) -> Self {
         Self(StatusCode::UNAUTHORIZED, message.to_owned())
+    }
+
+    fn forbidden(message: &str) -> Self {
+        Self(StatusCode::FORBIDDEN, message.to_owned())
     }
 
     fn internal(message: impl Into<String>) -> Self {

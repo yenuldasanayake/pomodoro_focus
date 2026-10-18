@@ -1,10 +1,13 @@
 pub mod alt_tab;
 pub mod app;
 pub mod audio;
+pub mod breaks;
 pub mod charts;
-pub mod export;          // <-- new
+pub mod export;
 pub mod server;
 pub mod site_blocker;
 pub mod storage;
+pub mod system;
 pub mod theme;
 pub mod timer;
+pub mod tray;
