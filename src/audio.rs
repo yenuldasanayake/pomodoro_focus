@@ -11,11 +11,7 @@ pub fn play_completion_beep() {
             }
         };
         let sink = Player::connect_new(stream.mixer());
-        sink.append(
-            SineWave::new(740.0)
-                .take_duration(Duration::from_millis(260))
-                .amplify(0.18),
-        );
+        sink.append(SineWave::new(740.0).take_duration(Duration::from_millis(260)).amplify(0.18));
         sink.sleep_until_end();
     });
 }

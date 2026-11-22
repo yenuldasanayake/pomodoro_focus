@@ -28,9 +28,10 @@ temporarily lock PIN-protected actions.
 ## Data files
 
 - `settings.json` stores timer lengths and the session cycle.
-- `data/history.json` stores study seconds by local calendar date.
+- `data/history.json` stores study seconds and completed sessions by local calendar date.
 - `data/notes.json` stores completed-session notes, timestamps, durations, and
   optional subject tags.
+- `data/reflections.json` stores your weekly reflections.
 
 These files are created in the current working directory. Existing history and
 notes are retained across launches.

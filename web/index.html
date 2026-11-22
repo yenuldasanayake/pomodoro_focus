@@ -154,7 +154,7 @@ body.flash::before{content:"";position:fixed;inset:0;background:var(--accent);op
 
   <section class="card">
     <div class="eyebrow">Export data</div>
-    <p class="today" style="margin-top:6px">Download your history and notes.</p>
+    <p class="today" style="margin-top:6px">Download your history, notes, and weekly reflections.</p>
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:14px">
       <a class="button ghost" id="export-history" target="_blank" rel="noopener">History CSV</a>
       <a class="button ghost" id="export-notes" target="_blank" rel="noopener">Notes CSV</a>
@@ -179,7 +179,7 @@ body.flash::before{content:"";position:fixed;inset:0;background:var(--accent);op
   <section class="card" id="reset-card">
     <div class="eyebrow" style="color:#f28b82">Danger zone</div>
     <p class="today" style="margin-top:6px">
-      Permanently delete all study history and notes. Settings, PIN, and blocked sites are not touched.
+      Permanently delete all study history, notes, and weekly reflections. Settings and PIN are not touched.
     </p>
     <button class="button danger wide" style="margin-top:14px" onclick="resetAllData()">Reset all data</button>
   </section>
@@ -202,7 +202,12 @@ body.flash::before{content:"";position:fixed;inset:0;background:var(--accent);op
     <div class="grid" style="margin-top:8px">
       <div><label>Daily goal · min (0 = off)</label><input id="goal" type="number" min="0" max="720" inputmode="numeric"></div>
     </div>
+    <label for="active-task">Active task</label>
+    <input id="active-task" placeholder="What are you working on?">
     <label class="check-row"><input id="auto-start" type="checkbox"><span>Auto-start next session</span></label>
+    <label class="check-row"><input id="desktop-notifications" type="checkbox"><span>Show desktop notifications</span></label>
+    <label class="check-row"><input id="completion-sound" type="checkbox"><span>Play completion sound</span></label>
+    <label class="check-row"><input id="launch-at-startup" type="checkbox"><span>Launch when Windows starts</span></label>
     <label class="check-row"><input id="power-control" type="checkbox"><span>Allow remote shutdown/restart/lock</span></label>
     <label class="check-row"><input id="remote-import" type="checkbox"><span>Allow remote data import</span></label>
     <label class="check-row"><input id="start-minimized" type="checkbox"><span>Start minimized to tray</span></label>
@@ -306,6 +311,10 @@ async function saveSettings(){
       sessions_before_long_break:+$("sessions").value,
       auto_start_next:$("auto-start").checked,
       daily_goal_minutes:+$("goal").value,
+      active_task:$("active-task").value.trim(),
+      desktop_notifications:$("desktop-notifications").checked,
+      completion_sound:$("completion-sound").checked,
+      launch_at_startup:$("launch-at-startup").checked,
       remote_power_control:$("power-control").checked,
       remote_import:$("remote-import").checked,
       start_minimized:$("start-minimized").checked,
@@ -535,7 +544,7 @@ function cancelPower(){
 }
 
 async function resetAllData(){
-  if(!confirm("Permanently delete all study history and notes? This cannot be undone."))return;
+  if(!confirm("Permanently delete all study history, notes, and weekly reflections? This cannot be undone."))return;
   if(!confirm("Are you sure? Click OK again to confirm."))return;
   try{
     await post("/reset",{});
@@ -571,7 +580,7 @@ async function applyImport(){
 }
 
 async function applyImportReplace(){
-  if(!confirm("Replace ALL history and notes with this file? This cannot be undone."))return;
+  if(!confirm("Replace ALL history, notes, and weekly reflections with this file? This cannot be undone."))return;
   try{
     const contents=await readImportFile();
     const r=await post("/import/apply",{file_contents:contents,mode:"replace"});
@@ -652,6 +661,9 @@ async function refresh(){
       document.body.classList.add("flash");
       setTimeout(()=>document.body.classList.remove("flash"),900);
       if(navigator.vibrate)navigator.vibrate([80,40,80]);
+      if(lastMode!=="study"&&s.mode==="study"){
+        toast(s.active_task?"Break complete · Next: "+s.active_task:"Break complete · Ready to focus");
+      }
     }
     lastMode=s.mode;
     applyMode(s.mode);
@@ -685,6 +697,10 @@ async function refresh(){
       $("sessions").value=s.sessions_before_long_break;
       $("goal").value=s.daily_goal_minutes;
       $("auto-start").checked=s.auto_start_next;
+      $("active-task").value=s.active_task||"";
+      $("desktop-notifications").checked=s.desktop_notifications;
+      $("completion-sound").checked=s.completion_sound;
+      $("launch-at-startup").checked=!!s.launch_at_startup;
       $("power-control").checked=s.power_control_available;
       $("remote-import").checked=s.remote_import;
       $("start-minimized").checked=s.start_minimized;

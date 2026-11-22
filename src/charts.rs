@@ -7,6 +7,27 @@ use std::collections::BTreeMap;
 pub fn show(ui: &mut egui::Ui, history: &History, notes: &Notes) {
     ui.add_space(14.0);
     ui.horizontal(|ui| {
+        ui.label(
+            egui::RichText::new(format!("Today  {}", hours_and_minutes(history.today_seconds())))
+                .strong()
+                .color(crate::theme::TEXT),
+        );
+        ui.label(
+            egui::RichText::new(format!(
+                " · 7 days  {}",
+                hours_and_minutes(history.period_seconds(7))
+            ))
+            .color(crate::theme::MUTED),
+        );
+        ui.label(
+            egui::RichText::new(format!(
+                " · 30 days  {}",
+                hours_and_minutes(history.period_seconds(30))
+            ))
+            .color(crate::theme::MUTED),
+        );
+    });
+    ui.horizontal(|ui| {
         ui.heading("Your rhythm");
         ui.label(
             egui::RichText::new(format!("🔥 {} day streak", history.current_streak()))
@@ -22,10 +43,9 @@ pub fn show(ui: &mut egui::Ui, history: &History, notes: &Notes) {
 
     ui.columns(2, |columns| {
         columns[0].heading("Last 14 days");
-        Plot::new("daily-study")
-            .height(180.0)
-            .show_axes([false, true])
-            .show(&mut columns[0], |plot_ui| {
+        Plot::new("daily-study").height(180.0).show_axes([false, true]).show(
+            &mut columns[0],
+            |plot_ui| {
                 let today = Local::now().date_naive();
                 let bars = (0..14)
                     .rev()
@@ -43,13 +63,13 @@ pub fn show(ui: &mut egui::Ui, history: &History, notes: &Notes) {
                     })
                     .collect();
                 plot_ui.bar_chart(BarChart::new("Study hours", bars));
-            });
+            },
+        );
 
         columns[1].heading("Last 8 weeks");
-        Plot::new("weekly-study")
-            .height(180.0)
-            .show_axes([false, true])
-            .show(&mut columns[1], |plot_ui| {
+        Plot::new("weekly-study").height(180.0).show_axes([false, true]).show(
+            &mut columns[1],
+            |plot_ui| {
                 let today = Local::now().date_naive();
                 let monday =
                     today - Duration::days(i64::from(today.weekday().num_days_from_monday()));
@@ -76,7 +96,8 @@ pub fn show(ui: &mut egui::Ui, history: &History, notes: &Notes) {
                     })
                     .collect();
                 plot_ui.bar_chart(BarChart::new("Study hours", bars));
-            });
+            },
+        );
     });
 
     ui.add_space(8.0);
@@ -106,11 +127,9 @@ pub fn show(ui: &mut egui::Ui, history: &History, notes: &Notes) {
                     .fill(Color32::from_rgb(166, 227, 161))
             })
             .collect();
-        Plot::new("subject-breakdown")
-            .height(170.0)
-            .show(&mut *ui, |plot_ui| {
-                plot_ui.bar_chart(BarChart::new("Study hours", bars));
-            });
+        Plot::new("subject-breakdown").height(170.0).show(&mut *ui, |plot_ui| {
+            plot_ui.bar_chart(BarChart::new("Study hours", bars));
+        });
     }
 }
 

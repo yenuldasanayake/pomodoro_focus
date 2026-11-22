@@ -1,12 +1,16 @@
 use crate::{
-    audio, breaks, export, system,
-    storage::{generate_id, History, Notes, Settings, Storage, StudyNote},
+    audio, breaks, export,
+    storage::{
+        History, Notes, Settings, Storage, StudyNote, WeeklyReflection, WeeklyReflections,
+        generate_id,
+    },
+    system,
     timer::{Mode, Timer},
 };
 use axum::{
     Json, Router,
     extract::{ConnectInfo, State},
-    http::{header, StatusCode},
+    http::{StatusCode, header},
     response::{Html, IntoResponse, Response},
     routing::{get, post},
 };
@@ -18,7 +22,7 @@ use std::{
     net::{IpAddr, SocketAddr},
     sync::{Arc, Mutex},
     thread,
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime},
 };
 use tokio::net::TcpListener;
 
@@ -49,6 +53,8 @@ pub struct AppState {
     pub settings: Settings,
     pub history: History,
     pub notes: Notes,
+    pub reflections: WeeklyReflections,
+    pub current_week_reflection: WeeklyReflection,
     pub timer: Timer,
     pub pin: String,
     pub port: u16,
@@ -56,6 +62,7 @@ pub struct AppState {
     pub local_url: String,
     pub server_error: Option<String>,
     pub pending_note_duration: Option<u64>,
+    pub task_prompt_pending: bool,
     pub pending_power_action: Option<PendingPowerAction>,
     pub should_restore_window: bool,
     pub error_message: Option<String>,
@@ -65,6 +72,9 @@ pub struct AppState {
     undo_deleted_notes: Vec<(Instant, StudyNote)>,
     history_dirty: bool,
     last_history_flush: Instant,
+    timer_dirty: bool,
+    last_timer_flush: Instant,
+    last_wall_check: SystemTime,
 }
 
 #[derive(Default)]
@@ -81,8 +91,7 @@ struct FailureRecord {
 
 impl AuthState {
     fn prune(&mut self, now: Instant) {
-        self.failures
-            .retain(|_, record| now.duration_since(record.last_seen) < AUTH_RECORD_TTL);
+        self.failures.retain(|_, record| now.duration_since(record.last_seen) < AUTH_RECORD_TTL);
     }
 
     fn record_success(&mut self, ip: IpAddr) {
@@ -121,11 +130,13 @@ impl AppState {
             warnings.push(error.to_string());
         }
 
-        let mut settings =
-            load_with_warning(storage.load_settings(), "settings", &mut warnings);
+        let mut settings = load_with_warning(storage.load_settings(), "settings", &mut warnings);
+        settings.launch_at_startup = system::startup_enabled();
         let history = load_with_warning(storage.load_history(), "history", &mut warnings);
         let notes = load_with_warning(storage.load_notes(), "notes", &mut warnings);
-
+        let reflections =
+            load_with_warning(storage.load_reflections(), "weekly reflections", &mut warnings);
+        let current_week_reflection = reflections.for_week(&WeeklyReflection::current_week_start());
 
         if settings.pin.is_empty() {
             settings.pin = generate_pin()?;
@@ -134,14 +145,15 @@ impl AppState {
             }
         }
 
-        let timer = Timer::new(&settings);
-
-
-        let error_message = if warnings.is_empty() {
-            None
-        } else {
-            Some(warnings.join(" · "))
+        let timer = match storage.load_timer() {
+            Ok(snapshot) => Timer::restore(&settings, snapshot),
+            Err(error) => {
+                warnings.push(format!("Could not load saved timer state: {error}"));
+                Timer::new(&settings)
+            }
         };
+
+        let error_message = if warnings.is_empty() { None } else { Some(warnings.join(" · ")) };
 
         let pin = settings.pin.clone();
         let port = settings.port;
@@ -150,6 +162,8 @@ impl AppState {
             settings,
             history,
             notes,
+            reflections,
+            current_week_reflection,
             timer,
             pin,
             port,
@@ -157,6 +171,7 @@ impl AppState {
             local_url: String::new(),
             server_error: None,
             pending_note_duration: None,
+            task_prompt_pending: false,
             pending_power_action: None,
             should_restore_window: false,
             error_message,
@@ -166,13 +181,14 @@ impl AppState {
             undo_deleted_notes: Vec::new(),
             history_dirty: false,
             last_history_flush: Instant::now(),
+            timer_dirty: false,
+            last_timer_flush: Instant::now(),
+            last_wall_check: SystemTime::now(),
         })
     }
 
     pub fn undo_available(&self) -> bool {
-        self.undo_deleted_notes
-            .last()
-            .is_some_and(|(when, _)| when.elapsed() < UNDO_WINDOW)
+        self.undo_deleted_notes.last().is_some_and(|(when, _)| when.elapsed() < UNDO_WINDOW)
     }
 
     pub fn power_control_available(&self) -> bool {
@@ -186,16 +202,28 @@ impl AppState {
     pub fn pending_power_seconds(&self) -> Option<u32> {
         self.pending_power_action
             .as_ref()
-            .map(|p| {
-                p.deadline
-                    .saturating_duration_since(Instant::now())
-                    .as_secs() as u32
-            })
+            .map(|p| p.deadline.saturating_duration_since(Instant::now()).as_secs() as u32)
             .filter(|&s| s > 0)
     }
 
     pub fn tick(&mut self) {
         let now = Instant::now();
+        let week_start = WeeklyReflection::current_week_start();
+        if self.current_week_reflection.week_start != week_start {
+            self.current_week_reflection = self.reflections.for_week(&week_start);
+        }
+
+        if let Ok(wall_elapsed) = SystemTime::now().duration_since(self.last_wall_check) {
+            if wall_elapsed > Duration::from_secs(5) && self.timer.running {
+                self.timer.running = false;
+                self.timer_dirty = true;
+                self.error_message = Some(
+                    "Timer paused after sleep or system suspension. Press Start when ready."
+                        .to_owned(),
+                );
+            }
+            self.last_wall_check = SystemTime::now();
+        }
 
         if let Some(pending) = &self.pending_power_action {
             if now >= pending.deadline {
@@ -206,10 +234,12 @@ impl AppState {
             self.ctx.request_repaint_after(Duration::from_millis(500));
         }
 
-        self.undo_deleted_notes
-            .retain(|(when, _)| now.duration_since(*when) < UNDO_WINDOW);
+        self.undo_deleted_notes.retain(|(when, _)| now.duration_since(*when) < UNDO_WINDOW);
 
         let completed = self.timer.update(&self.settings);
+        if self.timer.running {
+            self.timer_dirty = true;
+        }
 
         let studied = self.timer.take_study_seconds();
         if studied > 0 {
@@ -220,11 +250,27 @@ impl AppState {
         if self.history_dirty && self.last_history_flush.elapsed() >= HISTORY_FLUSH_INTERVAL {
             self.flush_history();
         }
+        if self.timer_dirty && self.last_timer_flush.elapsed() >= Duration::from_secs(5) {
+            self.flush_timer();
+        }
 
         if let Some(mode) = completed {
-            audio::play_completion_beep();
+            if self.settings.completion_sound {
+                audio::play_completion_beep();
+            }
+            if self.settings.desktop_notifications {
+                let message = match mode {
+                    Mode::Study => "Focus session complete. Time for a break.",
+                    Mode::ShortBreak | Mode::LongBreak => "Break complete. Time to focus.",
+                };
+                system::notify("Pomodoro Focus", message);
+            }
             if mode == Mode::Study {
                 self.pending_note_duration = Some(u64::from(self.settings.study_minutes) * 60);
+                self.history.add_completed_session_today();
+                self.history_dirty = true;
+            } else {
+                self.task_prompt_pending = true;
             }
             self.flush_history();
 
@@ -251,8 +297,25 @@ impl AppState {
         }
     }
 
+    pub fn flush_timer(&mut self) {
+        if !self.timer_dirty {
+            return;
+        }
+        match self.storage.save_timer(&self.timer.snapshot()) {
+            Ok(()) => {
+                self.timer_dirty = false;
+                self.last_timer_flush = Instant::now();
+            }
+            Err(error) => {
+                self.error_message = Some(format!("Could not save timer state: {error}"));
+            }
+        }
+    }
+
     pub fn flush_all(&mut self) {
         self.flush_history();
+        self.timer_dirty = true;
+        self.flush_timer();
         if let Err(error) = self.storage.save_notes(&self.notes) {
             eprintln!("Could not save notes on exit: {error}");
         }
@@ -282,6 +345,8 @@ impl AppState {
             _ => return Err("Command must be start, pause, reset, or skip".to_owned()),
         }
         self.collect_study_time();
+        self.timer_dirty = true;
+        self.flush_timer();
         self.ctx.request_repaint();
         Ok(())
     }
@@ -293,11 +358,44 @@ impl AppState {
         // Preserve fields controlled from the desktop or generated locally.
         settings.pin = self.settings.pin.clone();
         settings.port = self.settings.port;
+        system::set_startup_enabled(settings.launch_at_startup)
+            .map_err(|error| format!("Could not update startup settings: {error}"))?;
         self.storage
             .save_settings(&settings)
             .map_err(|error| format!("Could not save settings: {error}"))?;
         self.settings = settings;
         self.timer.set_settings(&self.settings);
+        self.ctx.request_repaint();
+        Ok(())
+    }
+
+    pub fn save_weekly_reflection(
+        &mut self,
+        mut reflection: WeeklyReflection,
+    ) -> Result<(), String> {
+        reflection.week_start = WeeklyReflection::current_week_start();
+        reflection.went_well = reflection.went_well.trim().to_owned();
+        reflection.adjust_next_time = reflection.adjust_next_time.trim().to_owned();
+        reflection.next_week_focus = reflection.next_week_focus.trim().to_owned();
+
+        let previous = self.reflections.clone();
+        self.reflections.upsert(reflection.clone());
+        if let Err(error) = self.storage.save_reflections(&self.reflections) {
+            self.reflections = previous;
+            return Err(format!("Could not save weekly reflection: {error}"));
+        }
+        self.current_week_reflection = reflection;
+        self.ctx.request_repaint();
+        Ok(())
+    }
+
+    pub fn set_active_task(&mut self, task: String) -> Result<(), String> {
+        let mut settings = self.settings.clone();
+        settings.active_task = task.trim().to_owned();
+        self.storage
+            .save_settings(&settings)
+            .map_err(|error| format!("Could not save active task: {error}"))?;
+        self.settings = settings;
         self.ctx.request_repaint();
         Ok(())
     }
@@ -314,7 +412,11 @@ impl AppState {
         }
         let subject = subject
             .map(|value| value.trim().to_owned())
-            .filter(|value| !value.is_empty());
+            .filter(|value| !value.is_empty())
+            .or_else(|| {
+                let task = self.settings.active_task.trim();
+                (!task.is_empty()).then(|| task.to_owned())
+            });
         let id = generate_id();
         self.notes.entries.push(StudyNote {
             id: id.clone(),
@@ -342,9 +444,8 @@ impl AppState {
         if accomplishment.is_empty() {
             return Err("Note text cannot be empty".to_owned());
         }
-        let subject = subject
-            .map(|value| value.trim().to_owned())
-            .filter(|value| !value.is_empty());
+        let subject =
+            subject.map(|value| value.trim().to_owned()).filter(|value| !value.is_empty());
         let Some(index) = self.notes.find_index(id) else {
             return Err("Note not found".to_owned());
         };
@@ -402,8 +503,8 @@ impl AppState {
     }
 
     pub fn rotate_pin(&mut self) -> Result<(), String> {
-        let new_pin = generate_pin()
-            .map_err(|error| format!("Could not generate a new PIN: {error}"))?;
+        let new_pin =
+            generate_pin().map_err(|error| format!("Could not generate a new PIN: {error}"))?;
         let mut settings = self.settings.clone();
         settings.pin = new_pin.clone();
         self.storage
@@ -512,22 +613,40 @@ impl AppState {
     pub fn reset_all_data(&mut self) -> Result<(), String> {
         let previous_history = self.history.clone();
         let previous_notes = self.notes.clone();
+        let previous_reflections = self.reflections.clone();
+        let previous_current_reflection = self.current_week_reflection.clone();
 
         self.history = History::default();
         self.notes = Notes::default();
+        self.reflections = WeeklyReflections::default();
+        self.current_week_reflection =
+            self.reflections.for_week(&WeeklyReflection::current_week_start());
         self.history_dirty = true;
         self.undo_deleted_notes.clear();
 
         if let Err(error) = self.storage.save_history(&self.history) {
             self.history = previous_history;
             self.notes = previous_notes;
+            self.reflections = previous_reflections;
+            self.current_week_reflection = previous_current_reflection;
             return Err(format!("Could not reset history: {error}"));
         }
         if let Err(error) = self.storage.save_notes(&self.notes) {
             self.history = previous_history;
             self.notes = previous_notes;
+            self.reflections = previous_reflections;
+            self.current_week_reflection = previous_current_reflection;
             let _ = self.storage.save_history(&self.history);
             return Err(format!("Could not reset notes: {error}"));
+        }
+        if let Err(error) = self.storage.save_reflections(&self.reflections) {
+            self.history = previous_history;
+            self.notes = previous_notes;
+            self.reflections = previous_reflections;
+            self.current_week_reflection = previous_current_reflection;
+            let _ = self.storage.save_history(&self.history);
+            let _ = self.storage.save_notes(&self.notes);
+            return Err(format!("Could not reset weekly reflections: {error}"));
         }
 
         self.history_dirty = false;
@@ -555,7 +674,6 @@ where
         T::default()
     })
 }
-
 
 pub fn generate_pin() -> Result<String, getrandom::Error> {
     let mut bytes = [0u8; 4];
@@ -602,10 +720,7 @@ pub fn build_router(state: SharedState) -> Router {
 
 pub fn start_server(state: SharedState) {
     thread::spawn(move || {
-        let runtime = match tokio::runtime::Builder::new_multi_thread()
-            .enable_all()
-            .build()
-        {
+        let runtime = match tokio::runtime::Builder::new_multi_thread().enable_all().build() {
             Ok(runtime) => runtime,
             Err(error) => {
                 report_server_error(&state, format!("Could not start phone server: {error}"));
@@ -644,10 +759,7 @@ pub fn start_server(state: SharedState) {
         let port = match listener.local_addr() {
             Ok(address) => address.port(),
             Err(error) => {
-                report_server_error(
-                    &state,
-                    format!("Could not read phone server port: {error}"),
-                );
+                report_server_error(&state, format!("Could not read phone server port: {error}"));
                 return;
             }
         };
@@ -671,11 +783,7 @@ pub fn start_server(state: SharedState) {
 
         eprintln!("Phone remote listening on 0.0.0.0:{port}");
         let result = runtime.block_on(async {
-            axum::serve(
-                listener,
-                router.into_make_service_with_connect_info::<SocketAddr>(),
-            )
-            .await
+            axum::serve(listener, router.into_make_service_with_connect_info::<SocketAddr>()).await
         });
         if let Err(error) = result {
             report_server_error(&state, format!("Phone server stopped: {error}"));
@@ -703,10 +811,7 @@ async fn manifest() -> impl IntoResponse {
 }
 
 async fn icon() -> impl IntoResponse {
-    (
-        [(axum::http::header::CONTENT_TYPE, "image/svg+xml")],
-        include_str!("../web/icon.svg"),
-    )
+    ([(axum::http::header::CONTENT_TYPE, "image/svg+xml")], include_str!("../web/icon.svg"))
 }
 
 #[derive(Serialize)]
@@ -756,12 +861,14 @@ struct StatusResponse {
     pending_power_seconds: Option<u32>,
     start_minimized: bool,
     close_to_tray: bool,
+    active_task: String,
+    desktop_notifications: bool,
+    completion_sound: bool,
+    launch_at_startup: bool,
 }
 
 async fn status(State(shared): State<SharedState>) -> Result<Json<StatusResponse>, ApiError> {
-    let mut state = shared
-        .lock()
-        .map_err(|_| ApiError::internal("App state is unavailable"))?;
+    let mut state = shared.lock().map_err(|_| ApiError::internal("App state is unavailable"))?;
     state.tick();
 
     let today_seconds = state.history.today_seconds();
@@ -772,11 +879,9 @@ async fn status(State(shared): State<SharedState>) -> Result<Json<StatusResponse
         None
     };
 
-    let break_suggestion = breaks::current_suggestion(
-        state.timer.mode,
-        state.timer.elapsed_in_mode,
-    )
-    .map(|s| s.to_owned());
+    let break_suggestion =
+        breaks::current_suggestion(state.timer.mode, state.timer.elapsed_in_mode)
+            .map(|s| s.to_owned());
 
     let undo_available = state.undo_available();
     let power_control_available = state.power_control_available();
@@ -784,14 +889,8 @@ async fn status(State(shared): State<SharedState>) -> Result<Json<StatusResponse
     let pending_power_action = state.pending_power_action.as_ref().map(|p| p.action);
     let pending_power_seconds = state.pending_power_seconds();
 
-    let notes: Vec<NoteSummary> = state
-        .notes
-        .entries
-        .iter()
-        .rev()
-        .take(20)
-        .map(NoteSummary::from)
-        .collect();
+    let notes: Vec<NoteSummary> =
+        state.notes.entries.iter().rev().take(20).map(NoteSummary::from).collect();
 
     Ok(Json(StatusResponse {
         remaining_seconds: state.timer.remaining_seconds,
@@ -816,6 +915,10 @@ async fn status(State(shared): State<SharedState>) -> Result<Json<StatusResponse
         pending_power_seconds,
         start_minimized: state.settings.start_minimized,
         close_to_tray: state.settings.close_to_tray,
+        active_task: state.settings.active_task.clone(),
+        desktop_notifications: state.settings.desktop_notifications,
+        completion_sound: state.settings.completion_sound,
+        launch_at_startup: state.settings.launch_at_startup,
     }))
 }
 
@@ -829,18 +932,13 @@ async fn export_history_csv(
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     axum::extract::Query(query): axum::extract::Query<TokenQuery>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let mut state = shared
-        .lock()
-        .map_err(|_| ApiError::internal("App state is unavailable"))?;
+    let mut state = shared.lock().map_err(|_| ApiError::internal("App state is unavailable"))?;
     verify_token(&mut state, addr.ip(), &query.token)?;
     state.tick();
     let body = export::history_csv(&state.history);
     Ok((
         [(header::CONTENT_TYPE, "text/csv; charset=utf-8")],
-        [(
-            header::CONTENT_DISPOSITION,
-            "attachment; filename=\"history.csv\"",
-        )],
+        [(header::CONTENT_DISPOSITION, "attachment; filename=\"history.csv\"")],
         body,
     ))
 }
@@ -850,18 +948,13 @@ async fn export_notes_csv(
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     axum::extract::Query(query): axum::extract::Query<TokenQuery>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let mut state = shared
-        .lock()
-        .map_err(|_| ApiError::internal("App state is unavailable"))?;
+    let mut state = shared.lock().map_err(|_| ApiError::internal("App state is unavailable"))?;
     verify_token(&mut state, addr.ip(), &query.token)?;
     state.tick();
     let body = export::notes_csv(&state.notes);
     Ok((
         [(header::CONTENT_TYPE, "text/csv; charset=utf-8")],
-        [(
-            header::CONTENT_DISPOSITION,
-            "attachment; filename=\"notes.csv\"",
-        )],
+        [(header::CONTENT_DISPOSITION, "attachment; filename=\"notes.csv\"")],
         body,
     ))
 }
@@ -871,18 +964,13 @@ async fn export_all_csv(
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     axum::extract::Query(query): axum::extract::Query<TokenQuery>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let mut state = shared
-        .lock()
-        .map_err(|_| ApiError::internal("App state is unavailable"))?;
+    let mut state = shared.lock().map_err(|_| ApiError::internal("App state is unavailable"))?;
     verify_token(&mut state, addr.ip(), &query.token)?;
     state.tick();
     let body = export::all_csv(&state.history, &state.notes);
     Ok((
         [(header::CONTENT_TYPE, "text/csv; charset=utf-8")],
-        [(
-            header::CONTENT_DISPOSITION,
-            "attachment; filename=\"all.csv\"",
-        )],
+        [(header::CONTENT_DISPOSITION, "attachment; filename=\"all.csv\"")],
         body,
     ))
 }
@@ -892,18 +980,13 @@ async fn export_all_json(
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     axum::extract::Query(query): axum::extract::Query<TokenQuery>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let mut state = shared
-        .lock()
-        .map_err(|_| ApiError::internal("App state is unavailable"))?;
+    let mut state = shared.lock().map_err(|_| ApiError::internal("App state is unavailable"))?;
     verify_token(&mut state, addr.ip(), &query.token)?;
     state.tick();
-    let body = export::all_json(&state.history, &state.notes);
+    let body = export::all_json(&state.history, &state.notes, &state.reflections);
     Ok((
         [(header::CONTENT_TYPE, "application/json; charset=utf-8")],
-        [(
-            header::CONTENT_DISPOSITION,
-            "attachment; filename=\"all.json\"",
-        )],
+        [(header::CONTENT_DISPOSITION, "attachment; filename=\"all.json\"")],
         body,
     ))
 }
@@ -919,15 +1002,13 @@ async fn import_preview(
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     Json(request): Json<ImportRequest>,
 ) -> Result<Json<ImportPreviewResponse>, ApiError> {
-    let mut state = shared
-        .lock()
-        .map_err(|_| ApiError::internal("App state is unavailable"))?;
+    let mut state = shared.lock().map_err(|_| ApiError::internal("App state is unavailable"))?;
     verify_token(&mut state, addr.ip(), &request.token)?;
     if !state.import_available() {
         return Err(ApiError::forbidden("Remote import is disabled"));
     }
-    let bundle = crate::import::parse(request.file_contents.as_bytes())
-        .map_err(ApiError::bad_request)?;
+    let bundle =
+        crate::import::parse(request.file_contents.as_bytes()).map_err(ApiError::bad_request)?;
     let preview = crate::import::preview(&bundle, &state.history, &state.notes);
     Ok(Json(ImportPreviewResponse {
         version: preview.version,
@@ -963,9 +1044,7 @@ async fn import_apply(
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     Json(request): Json<ImportApplyRequest>,
 ) -> Result<Json<ImportApplyResponse>, ApiError> {
-    let mut state = shared
-        .lock()
-        .map_err(|_| ApiError::internal("App state is unavailable"))?;
+    let mut state = shared.lock().map_err(|_| ApiError::internal("App state is unavailable"))?;
     verify_token(&mut state, addr.ip(), &request.token)?;
     if !state.import_available() {
         return Err(ApiError::forbidden("Remote import is disabled"));
@@ -979,36 +1058,54 @@ async fn import_apply(
             )));
         }
     };
-    let bundle = crate::import::parse(request.file_contents.as_bytes())
-        .map_err(ApiError::bad_request)?;
+    let bundle =
+        crate::import::parse(request.file_contents.as_bytes()).map_err(ApiError::bad_request)?;
 
     let previous_history = state.history.clone();
     let previous_notes = state.notes.clone();
+    let previous_reflections = state.reflections.clone();
 
     let mut history = std::mem::take(&mut state.history);
     let mut notes = std::mem::take(&mut state.notes);
-    let report = crate::import::apply(bundle, &mut history, &mut notes, mode);
+    let mut reflections = std::mem::take(&mut state.reflections);
+    let report = crate::import::apply_with_reflections(
+        bundle,
+        &mut history,
+        &mut notes,
+        &mut reflections,
+        mode,
+    );
     state.history = history;
     state.notes = notes;
+    state.reflections = reflections;
 
     if let Err(error) = state.storage.save_history(&state.history) {
         state.history = previous_history;
         state.notes = previous_notes;
+        state.reflections = previous_reflections;
         let _ = state.storage.save_history(&state.history);
         let _ = state.storage.save_notes(&state.notes);
-        return Err(ApiError::internal(format!(
-            "Could not save history: {error}"
-        )));
+        return Err(ApiError::internal(format!("Could not save history: {error}")));
     }
     if let Err(error) = state.storage.save_notes(&state.notes) {
         state.history = previous_history;
         state.notes = previous_notes;
+        state.reflections = previous_reflections;
         let _ = state.storage.save_history(&state.history);
         let _ = state.storage.save_notes(&state.notes);
-        return Err(ApiError::internal(format!(
-            "Could not save notes: {error}"
-        )));
+        return Err(ApiError::internal(format!("Could not save notes: {error}")));
     }
+    if let Err(error) = state.storage.save_reflections(&state.reflections) {
+        state.history = previous_history;
+        state.notes = previous_notes;
+        state.reflections = previous_reflections;
+        let _ = state.storage.save_history(&state.history);
+        let _ = state.storage.save_notes(&state.notes);
+        let _ = state.storage.save_reflections(&state.reflections);
+        return Err(ApiError::internal(format!("Could not save weekly reflections: {error}")));
+    }
+    state.current_week_reflection =
+        state.reflections.for_week(&WeeklyReflection::current_week_start());
 
     state.ctx.request_repaint();
     Ok(Json(ImportApplyResponse {
@@ -1034,15 +1131,10 @@ async fn reset_all(
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     Json(request): Json<TokenOnlyRequest>,
 ) -> Result<Json<MessageResponse>, ApiError> {
-    let mut state = shared
-        .lock()
-        .map_err(|_| ApiError::internal("App state is unavailable"))?;
+    let mut state = shared.lock().map_err(|_| ApiError::internal("App state is unavailable"))?;
     verify_token(&mut state, addr.ip(), &request.token)?;
     state.reset_all_data().map_err(ApiError::internal)?;
-    Ok(Json(MessageResponse {
-        ok: true,
-        warning: None,
-    }))
+    Ok(Json(MessageResponse { ok: true, warning: None }))
 }
 
 #[derive(Deserialize)]
@@ -1056,17 +1148,10 @@ async fn command(
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     Json(request): Json<CommandRequest>,
 ) -> Result<Json<MessageResponse>, ApiError> {
-    let mut state = shared
-        .lock()
-        .map_err(|_| ApiError::internal("App state is unavailable"))?;
+    let mut state = shared.lock().map_err(|_| ApiError::internal("App state is unavailable"))?;
     verify_token(&mut state, addr.ip(), &request.token)?;
-    state
-        .execute_command(&request.command)
-        .map_err(ApiError::bad_request)?;
-    Ok(Json(MessageResponse {
-        ok: true,
-        warning: None,
-    }))
+    state.execute_command(&request.command).map_err(ApiError::bad_request)?;
+    Ok(Json(MessageResponse { ok: true, warning: None }))
 }
 
 #[derive(Deserialize)]
@@ -1088,6 +1173,14 @@ struct SettingsRequest {
     start_minimized: bool,
     #[serde(default)]
     close_to_tray: bool,
+    #[serde(default)]
+    active_task: String,
+    #[serde(default)]
+    desktop_notifications: bool,
+    #[serde(default)]
+    completion_sound: bool,
+    #[serde(default)]
+    launch_at_startup: bool,
 }
 
 async fn update_settings(
@@ -1095,9 +1188,7 @@ async fn update_settings(
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     Json(request): Json<SettingsRequest>,
 ) -> Result<Json<MessageResponse>, ApiError> {
-    let mut state = shared
-        .lock()
-        .map_err(|_| ApiError::internal("App state is unavailable"))?;
+    let mut state = shared.lock().map_err(|_| ApiError::internal("App state is unavailable"))?;
     verify_token(&mut state, addr.ip(), &request.token)?;
     let settings = Settings {
         study_minutes: request.study_minutes,
@@ -1112,16 +1203,14 @@ async fn update_settings(
         remote_import: request.remote_import,
         start_minimized: request.start_minimized,
         close_to_tray: request.close_to_tray,
+        active_task: request.active_task,
+        desktop_notifications: request.desktop_notifications,
+        completion_sound: request.completion_sound,
+        launch_at_startup: request.launch_at_startup,
     };
-    state
-        .update_settings(settings)
-        .map_err(ApiError::internal)?;
-    Ok(Json(MessageResponse {
-        ok: true,
-        warning: None,
-    }))
+    state.update_settings(settings).map_err(ApiError::internal)?;
+    Ok(Json(MessageResponse { ok: true, warning: None }))
 }
-
 
 #[derive(Deserialize)]
 struct NoteRequest {
@@ -1136,18 +1225,10 @@ async fn add_note(
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     Json(request): Json<NoteRequest>,
 ) -> Result<Json<NoteCreatedResponse>, ApiError> {
-    let mut state = shared
-        .lock()
-        .map_err(|_| ApiError::internal("App state is unavailable"))?;
+    let mut state = shared.lock().map_err(|_| ApiError::internal("App state is unavailable"))?;
     verify_token(&mut state, addr.ip(), &request.token)?;
-    let subject = if request.subject.trim().is_empty() {
-        None
-    } else {
-        Some(request.subject)
-    };
-    let id = state
-        .save_note(request.accomplishment, subject, 0)
-        .map_err(ApiError::bad_request)?;
+    let subject = if request.subject.trim().is_empty() { None } else { Some(request.subject) };
+    let id = state.save_note(request.accomplishment, subject, 0).map_err(ApiError::bad_request)?;
     Ok(Json(NoteCreatedResponse { ok: true, id }))
 }
 
@@ -1165,22 +1246,13 @@ async fn update_note(
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     Json(request): Json<NoteUpdateRequest>,
 ) -> Result<Json<MessageResponse>, ApiError> {
-    let mut state = shared
-        .lock()
-        .map_err(|_| ApiError::internal("App state is unavailable"))?;
+    let mut state = shared.lock().map_err(|_| ApiError::internal("App state is unavailable"))?;
     verify_token(&mut state, addr.ip(), &request.token)?;
-    let subject = if request.subject.trim().is_empty() {
-        None
-    } else {
-        Some(request.subject)
-    };
+    let subject = if request.subject.trim().is_empty() { None } else { Some(request.subject) };
     state
         .update_note(&request.id, request.accomplishment, subject)
         .map_err(ApiError::bad_request)?;
-    Ok(Json(MessageResponse {
-        ok: true,
-        warning: None,
-    }))
+    Ok(Json(MessageResponse { ok: true, warning: None }))
 }
 
 #[derive(Deserialize)]
@@ -1194,17 +1266,10 @@ async fn delete_note(
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     Json(request): Json<NoteDeleteRequest>,
 ) -> Result<Json<MessageResponse>, ApiError> {
-    let mut state = shared
-        .lock()
-        .map_err(|_| ApiError::internal("App state is unavailable"))?;
+    let mut state = shared.lock().map_err(|_| ApiError::internal("App state is unavailable"))?;
     verify_token(&mut state, addr.ip(), &request.token)?;
-    state
-        .delete_note(&request.id)
-        .map_err(ApiError::bad_request)?;
-    Ok(Json(MessageResponse {
-        ok: true,
-        warning: None,
-    }))
+    state.delete_note(&request.id).map_err(ApiError::bad_request)?;
+    Ok(Json(MessageResponse { ok: true, warning: None }))
 }
 
 #[derive(Deserialize)]
@@ -1217,15 +1282,10 @@ async fn undo_delete_note(
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     Json(request): Json<TokenOnlyRequest>,
 ) -> Result<Json<MessageResponse>, ApiError> {
-    let mut state = shared
-        .lock()
-        .map_err(|_| ApiError::internal("App state is unavailable"))?;
+    let mut state = shared.lock().map_err(|_| ApiError::internal("App state is unavailable"))?;
     verify_token(&mut state, addr.ip(), &request.token)?;
     state.undo_delete_note().map_err(ApiError::bad_request)?;
-    Ok(Json(MessageResponse {
-        ok: true,
-        warning: None,
-    }))
+    Ok(Json(MessageResponse { ok: true, warning: None }))
 }
 
 #[derive(Deserialize)]
@@ -1240,9 +1300,7 @@ async fn power_shutdown(
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     Json(request): Json<PowerActionRequest>,
 ) -> Result<Json<MessageResponse>, ApiError> {
-    let mut state = shared
-        .lock()
-        .map_err(|_| ApiError::internal("App state is unavailable"))?;
+    let mut state = shared.lock().map_err(|_| ApiError::internal("App state is unavailable"))?;
     verify_token(&mut state, addr.ip(), &request.token)?;
     if !state.power_control_available() {
         return Err(ApiError::forbidden("Remote power control is disabled"));
@@ -1251,10 +1309,7 @@ async fn power_shutdown(
         return Err(ApiError::bad_request("Missing confirm=true".to_owned()));
     }
     state.trigger_shutdown().map_err(ApiError::internal)?;
-    Ok(Json(MessageResponse {
-        ok: true,
-        warning: None,
-    }))
+    Ok(Json(MessageResponse { ok: true, warning: None }))
 }
 
 async fn power_restart(
@@ -1262,9 +1317,7 @@ async fn power_restart(
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     Json(request): Json<PowerActionRequest>,
 ) -> Result<Json<MessageResponse>, ApiError> {
-    let mut state = shared
-        .lock()
-        .map_err(|_| ApiError::internal("App state is unavailable"))?;
+    let mut state = shared.lock().map_err(|_| ApiError::internal("App state is unavailable"))?;
     verify_token(&mut state, addr.ip(), &request.token)?;
     if !state.power_control_available() {
         return Err(ApiError::forbidden("Remote power control is disabled"));
@@ -1273,10 +1326,7 @@ async fn power_restart(
         return Err(ApiError::bad_request("Missing confirm=true".to_owned()));
     }
     state.trigger_restart().map_err(ApiError::internal)?;
-    Ok(Json(MessageResponse {
-        ok: true,
-        warning: None,
-    }))
+    Ok(Json(MessageResponse { ok: true, warning: None }))
 }
 
 async fn power_lock(
@@ -1284,18 +1334,13 @@ async fn power_lock(
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     Json(request): Json<TokenOnlyRequest>,
 ) -> Result<Json<MessageResponse>, ApiError> {
-    let mut state = shared
-        .lock()
-        .map_err(|_| ApiError::internal("App state is unavailable"))?;
+    let mut state = shared.lock().map_err(|_| ApiError::internal("App state is unavailable"))?;
     verify_token(&mut state, addr.ip(), &request.token)?;
     if !state.power_control_available() {
         return Err(ApiError::forbidden("Remote power control is disabled"));
     }
     state.trigger_lock().map_err(ApiError::internal)?;
-    Ok(Json(MessageResponse {
-        ok: true,
-        warning: None,
-    }))
+    Ok(Json(MessageResponse { ok: true, warning: None }))
 }
 
 async fn power_cancel(
@@ -1303,15 +1348,10 @@ async fn power_cancel(
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     Json(request): Json<TokenOnlyRequest>,
 ) -> Result<Json<MessageResponse>, ApiError> {
-    let mut state = shared
-        .lock()
-        .map_err(|_| ApiError::internal("App state is unavailable"))?;
+    let mut state = shared.lock().map_err(|_| ApiError::internal("App state is unavailable"))?;
     verify_token(&mut state, addr.ip(), &request.token)?;
     state.cancel_power_action().map_err(ApiError::bad_request)?;
-    Ok(Json(MessageResponse {
-        ok: true,
-        warning: None,
-    }))
+    Ok(Json(MessageResponse { ok: true, warning: None }))
 }
 
 fn verify_token(state: &mut AppState, ip: IpAddr, token: &str) -> Result<(), ApiError> {

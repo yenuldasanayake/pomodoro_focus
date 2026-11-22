@@ -34,16 +34,11 @@ impl TrayHandle {
             let separator = PredefinedMenuItem::separator();
             let quit = MenuItem::new("Quit", true, None);
 
-            menu.append(&show)
-                .map_err(|e| std::io::Error::other(e.to_string()))?;
-            menu.append(&hide)
-                .map_err(|e| std::io::Error::other(e.to_string()))?;
-            menu.append(&toggle)
-                .map_err(|e| std::io::Error::other(e.to_string()))?;
-            menu.append(&separator)
-                .map_err(|e| std::io::Error::other(e.to_string()))?;
-            menu.append(&quit)
-                .map_err(|e| std::io::Error::other(e.to_string()))?;
+            menu.append(&show).map_err(|e| std::io::Error::other(e.to_string()))?;
+            menu.append(&hide).map_err(|e| std::io::Error::other(e.to_string()))?;
+            menu.append(&toggle).map_err(|e| std::io::Error::other(e.to_string()))?;
+            menu.append(&separator).map_err(|e| std::io::Error::other(e.to_string()))?;
+            menu.append(&quit).map_err(|e| std::io::Error::other(e.to_string()))?;
 
             let show_id = show.id().clone();
             let hide_id = hide.id().clone();
@@ -88,10 +83,7 @@ impl TrayHandle {
                 })
                 .map_err(|e| std::io::Error::other(e.to_string()))?;
 
-            return Ok(Self {
-                rx,
-                _icon: tray,
-            });
+            return Ok(Self { rx, _icon: tray });
         }
 
         #[cfg(not(windows))]
@@ -104,6 +96,15 @@ impl TrayHandle {
     pub fn poll(&self) -> Vec<TrayEvent> {
         self.rx.try_iter().collect()
     }
+
+    pub fn set_tooltip(&self, tooltip: &str) {
+        #[cfg(windows)]
+        {
+            let _ = self._icon.set_tooltip(Some(tooltip));
+        }
+        #[cfg(not(windows))]
+        let _ = tooltip;
+    }
 }
 
 #[cfg(windows)]
@@ -111,11 +112,12 @@ fn build_icon() -> tray_icon::Icon {
     // Same PNG as the window icon. Include from the project root.
     let bytes = include_bytes!("../icon.png");
     match eframe::icon_data::from_png_bytes(bytes) {
-        Ok(data) => tray_icon::Icon::from_rgba(data.rgba, data.width, data.height)
-            .unwrap_or_else(|error| {
+        Ok(data) => {
+            tray_icon::Icon::from_rgba(data.rgba, data.width, data.height).unwrap_or_else(|error| {
                 eprintln!("Could not build tray icon from PNG: {error}");
                 fallback_icon()
-            }),
+            })
+        }
         Err(error) => {
             eprintln!("Could not decode tray icon PNG: {error}");
             fallback_icon()

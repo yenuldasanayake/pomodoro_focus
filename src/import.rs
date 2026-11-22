@@ -7,7 +7,7 @@
 //! maximum per day (never sum, which would double-count); for notes we
 //! skip ids that already exist.
 
-use crate::storage::{History, Notes};
+use crate::storage::{History, Notes, WeeklyReflections};
 use serde::Deserialize;
 
 #[derive(Debug, Deserialize)]
@@ -17,6 +17,8 @@ pub struct Bundle {
     pub exported_at: String,
     pub history: History,
     pub notes: Notes,
+    #[serde(default)]
+    pub reflections: WeeklyReflections,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -86,9 +88,20 @@ pub fn apply(
     current_notes: &mut Notes,
     mode: Mode,
 ) -> Report {
+    let mut reflections = WeeklyReflections::default();
+    apply_with_reflections(bundle, current_history, current_notes, &mut reflections, mode)
+}
+
+pub fn apply_with_reflections(
+    bundle: Bundle,
+    current_history: &mut History,
+    current_notes: &mut Notes,
+    current_reflections: &mut WeeklyReflections,
+    mode: Mode,
+) -> Report {
     match mode {
-        Mode::Replace => apply_replace(bundle, current_history, current_notes),
-        Mode::Merge => apply_merge(bundle, current_history, current_notes),
+        Mode::Replace => apply_replace(bundle, current_history, current_notes, current_reflections),
+        Mode::Merge => apply_merge(bundle, current_history, current_notes, current_reflections),
     }
 }
 
@@ -100,7 +113,12 @@ pub struct Report {
     pub notes_skipped: usize,
 }
 
-fn apply_replace(bundle: Bundle, history: &mut History, notes: &mut Notes) -> Report {
+fn apply_replace(
+    bundle: Bundle,
+    history: &mut History,
+    notes: &mut Notes,
+    reflections: &mut WeeklyReflections,
+) -> Report {
     let report = Report {
         history_days_added: bundle.history.daily_seconds.len(),
         history_days_updated: 0,
@@ -109,12 +127,22 @@ fn apply_replace(bundle: Bundle, history: &mut History, notes: &mut Notes) -> Re
     };
     *history = bundle.history;
     *notes = bundle.notes;
+    *reflections = bundle.reflections;
     notes.ensure_ids();
     report
 }
 
-fn apply_merge(bundle: Bundle, history: &mut History, notes: &mut Notes) -> Report {
+fn apply_merge(
+    bundle: Bundle,
+    history: &mut History,
+    notes: &mut Notes,
+    reflections: &mut WeeklyReflections,
+) -> Report {
     let mut report = Report::default();
+
+    for reflection in bundle.reflections.entries {
+        reflections.upsert(reflection);
+    }
 
     for (day, seconds) in bundle.history.daily_seconds {
         match history.daily_seconds.get_mut(&day) {
@@ -129,6 +157,13 @@ fn apply_merge(bundle: Bundle, history: &mut History, notes: &mut Notes) -> Repo
                 report.history_days_added += 1;
             }
         }
+    }
+    for (day, sessions) in bundle.history.daily_sessions {
+        history
+            .daily_sessions
+            .entry(day)
+            .and_modify(|existing| *existing = (*existing).max(sessions))
+            .or_insert(sessions);
     }
 
     let mut existing_ids: std::collections::HashSet<String> =
@@ -176,18 +211,21 @@ mod tests {
             exported_at: "2026-10-01T00:00:00Z".to_owned(),
             history,
             notes: Notes { entries: notes },
+            reflections: WeeklyReflections::default(),
         }
     }
 
     #[test]
     fn parse_rejects_missing_version() {
-        let json = br#"{"version":0,"history":{"version":1,"daily_seconds":{}},"notes":{"entries":[]}}"#;
+        let json =
+            br#"{"version":0,"history":{"version":1,"daily_seconds":{}},"notes":{"entries":[]}}"#;
         assert!(parse(json).is_err());
     }
 
     #[test]
     fn parse_rejects_future_version() {
-        let json = br#"{"version":99,"history":{"version":1,"daily_seconds":{}},"notes":{"entries":[]}}"#;
+        let json =
+            br#"{"version":99,"history":{"version":1,"daily_seconds":{}},"notes":{"entries":[]}}"#;
         assert!(parse(json).is_err());
     }
 
@@ -197,12 +235,8 @@ mod tests {
         history.daily_seconds.insert("2026-10-01".to_owned(), 500);
         let mut notes = Notes::default();
 
-        let report = apply(
-            bundle(&[("2026-10-01", 1500)], vec![]),
-            &mut history,
-            &mut notes,
-            Mode::Merge,
-        );
+        let report =
+            apply(bundle(&[("2026-10-01", 1500)], vec![]), &mut history, &mut notes, Mode::Merge);
 
         assert_eq!(*history.daily_seconds.get("2026-10-01").unwrap(), 1500);
         assert_eq!(report.history_days_updated, 1);
@@ -215,12 +249,7 @@ mod tests {
         history.daily_seconds.insert("2026-10-01".to_owned(), 2000);
         let mut notes = Notes::default();
 
-        apply(
-            bundle(&[("2026-10-01", 1000)], vec![]),
-            &mut history,
-            &mut notes,
-            Mode::Merge,
-        );
+        apply(bundle(&[("2026-10-01", 1000)], vec![]), &mut history, &mut notes, Mode::Merge);
 
         assert_eq!(*history.daily_seconds.get("2026-10-01").unwrap(), 2000);
     }
@@ -231,23 +260,55 @@ mod tests {
         history.daily_seconds.insert("2026-10-01".to_owned(), 500);
         let mut notes = Notes::default();
 
-        let report = apply(
-            bundle(&[("2026-10-02", 1000)], vec![]),
-            &mut history,
-            &mut notes,
-            Mode::Merge,
-        );
+        let report =
+            apply(bundle(&[("2026-10-02", 1000)], vec![]), &mut history, &mut notes, Mode::Merge);
 
         assert!(history.daily_seconds.contains_key("2026-10-02"));
         assert_eq!(report.history_days_added, 1);
     }
 
     #[test]
+    fn merge_keeps_the_higher_daily_session_count() {
+        let mut history = History::default();
+        history.daily_sessions.insert("2026-10-01".to_owned(), 3);
+        let mut imported = bundle(&[], vec![]);
+        imported.history.daily_sessions.insert("2026-10-01".to_owned(), 5);
+        imported.history.daily_sessions.insert("2026-10-02".to_owned(), 2);
+        let mut notes = Notes::default();
+
+        apply(imported, &mut history, &mut notes, Mode::Merge);
+
+        assert_eq!(history.daily_sessions["2026-10-01"], 5);
+        assert_eq!(history.daily_sessions["2026-10-02"], 2);
+    }
+
+    #[test]
+    fn merge_imports_weekly_reflections_by_week() {
+        let mut current = WeeklyReflections::default();
+        current.upsert(crate::storage::WeeklyReflection {
+            week_start: "2026-10-05".to_owned(),
+            went_well: "Existing".to_owned(),
+            ..crate::storage::WeeklyReflection::default()
+        });
+        let mut imported = bundle(&[], vec![]);
+        imported.reflections.upsert(crate::storage::WeeklyReflection {
+            week_start: "2026-10-05".to_owned(),
+            went_well: "Updated".to_owned(),
+            ..crate::storage::WeeklyReflection::default()
+        });
+        let mut history = History::default();
+        let mut notes = Notes::default();
+
+        apply_with_reflections(imported, &mut history, &mut notes, &mut current, Mode::Merge);
+
+        assert_eq!(current.entries.len(), 1);
+        assert_eq!(current.entries[0].went_well, "Updated");
+    }
+
+    #[test]
     fn merge_skips_existing_notes_and_adds_new() {
         let mut history = History::default();
-        let mut notes = Notes {
-            entries: vec![note("a", "old")],
-        };
+        let mut notes = Notes { entries: vec![note("a", "old")] };
 
         let report = apply(
             bundle(&[], vec![note("a", "dup"), note("b", "new")]),
@@ -267,9 +328,7 @@ mod tests {
     fn replace_wipes_and_replaces() {
         let mut history = History::default();
         history.daily_seconds.insert("2026-09-01".to_owned(), 999);
-        let mut notes = Notes {
-            entries: vec![note("old", "gone")],
-        };
+        let mut notes = Notes { entries: vec![note("old", "gone")] };
 
         apply(
             bundle(&[("2026-10-01", 1000)], vec![note("new", "in")]),
@@ -291,12 +350,7 @@ mod tests {
         let mut legacy = note("", "no id");
         legacy.id.clear();
 
-        apply(
-            bundle(&[], vec![legacy]),
-            &mut history,
-            &mut notes,
-            Mode::Replace,
-        );
+        apply(bundle(&[], vec![legacy]), &mut history, &mut notes, Mode::Replace);
 
         assert_eq!(notes.entries.len(), 1);
         assert!(!notes.entries[0].id.is_empty());

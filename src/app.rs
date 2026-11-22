@@ -1,9 +1,10 @@
 use crate::{
-    breaks, charts, export, import, tray,
+    breaks, charts, export, import,
     server::{self, AppState, PowerAction, SharedState},
     storage::Storage,
     theme,
     timer::Mode,
+    tray,
 };
 use eframe::egui::{self, Align2, Color32, FontId, Id, Key, Pos2, Sense, Stroke, Vec2};
 use std::{
@@ -26,6 +27,12 @@ pub struct PomodoroApp {
     show_import_dialog: bool,
     import_mode: import::Mode,
     app_is_fullscreen: bool,
+    task_prompt_text: String,
+    reflection_went_well: String,
+    reflection_adjust_next_time: String,
+    reflection_next_week_focus: String,
+    reflection_week_start: String,
+    reflection_saved_snapshot: crate::storage::WeeklyReflection,
 }
 
 #[derive(Clone)]
@@ -41,6 +48,12 @@ impl PomodoroApp {
         let state = AppState::new(ctx.egui_ctx.clone(), storage)?;
         let previous_mode = state.timer.mode;
         let transition_from = theme::accent(previous_mode);
+        let task_prompt_text = state.settings.active_task.clone();
+        let reflection_went_well = state.current_week_reflection.went_well.clone();
+        let reflection_adjust_next_time = state.current_week_reflection.adjust_next_time.clone();
+        let reflection_next_week_focus = state.current_week_reflection.next_week_focus.clone();
+        let reflection_week_start = state.current_week_reflection.week_start.clone();
+        let reflection_saved_snapshot = state.current_week_reflection.clone();
         let shared = Arc::new(Mutex::new(state));
         server::start_server(shared.clone());
 
@@ -52,10 +65,8 @@ impl PomodoroApp {
             }
         };
         if tray.is_none() {
-            ctx.egui_ctx
-                .send_viewport_cmd(egui::ViewportCommand::Visible(true));
-            ctx.egui_ctx
-                .send_viewport_cmd(egui::ViewportCommand::Minimized(false));
+            ctx.egui_ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+            ctx.egui_ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
         }
 
         Ok(Self {
@@ -73,6 +84,12 @@ impl PomodoroApp {
             show_import_dialog: false,
             import_mode: import::Mode::Merge,
             app_is_fullscreen: false,
+            task_prompt_text,
+            reflection_went_well,
+            reflection_adjust_next_time,
+            reflection_next_week_focus,
+            reflection_week_start,
+            reflection_saved_snapshot,
         })
     }
 }
@@ -83,6 +100,15 @@ impl eframe::App for PomodoroApp {
         theme::apply(&ctx);
 
         if let Some(tray) = &self.tray {
+            let tooltip_state = if let Ok(state) = self.shared.lock() {
+                let minutes = state.timer.remaining_seconds / 60;
+                let seconds = state.timer.remaining_seconds % 60;
+                let status = if state.timer.running { "Running" } else { "Paused" };
+                format!("Pomodoro Focus — {status} · {minutes:02}:{seconds:02}")
+            } else {
+                "Pomodoro Focus".to_owned()
+            };
+            tray.set_tooltip(&tooltip_state);
             for event in tray.poll() {
                 match event {
                     tray::TrayEvent::ShowWindow => {
@@ -110,9 +136,7 @@ impl eframe::App for PomodoroApp {
         if ctx.input(|i| i.viewport().close_requested()) && !self.quit_from_tray {
             let mut minimize_instead = false;
             if let Ok(state) = self.shared.lock() {
-                if state.settings.close_to_tray || state.timer.running {
-                    minimize_instead = true;
-                }
+                minimize_instead = state.settings.close_to_tray;
             }
             if minimize_instead {
                 ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
@@ -178,6 +202,9 @@ impl eframe::App for PomodoroApp {
 
         state.tick();
         if state.timer.mode != self.previous_mode {
+            if state.timer.mode == Mode::Study && self.previous_mode != Mode::Study {
+                self.task_prompt_text = state.settings.active_task.clone();
+            }
             self.transition_from = theme::accent(self.previous_mode);
             self.previous_mode = state.timer.mode;
             self.transition_started = Instant::now();
@@ -192,42 +219,43 @@ impl eframe::App for PomodoroApp {
             ctx.request_repaint_after(Duration::from_millis(160));
         }
 
-        egui::CentralPanel::default()
-            .frame(egui::Frame::new().fill(theme::BACKGROUND))
-            .show(root_ui, |ui| {
-                egui::Frame::new()
-                    .inner_margin(egui::Margin::symmetric(28, 24))
-                    .show(ui, |ui| {
-                        egui::ScrollArea::vertical()
-                            .auto_shrink([false, false])
-                            .show(ui, |ui| {
-                                self.show_top(ui, &state);
-                                ui.add_space(14.0);
-                                ui.vertical_centered(|ui| {
-                                    self.show_timer(ui, &state, accent);
-                                    ui.add_space(12.0);
-                                    self.show_controls(ui, &mut state, accent);
-                                    ui.add_space(8.0);
-                                    ui.label(
-                                        egui::RichText::new(
-                                            "Space · start/pause   ·   R · reset   ·   S · skip",
-                                        )
-                                        .size(11.0)
-                                        .color(theme::MUTED),
-                                    );
-                                });
-                                ui.add_space(24.0);
-                                self.show_connection(ui, &mut state);
-                                ui.add_space(8.0);
-                                self.show_settings(ui, &mut state);
-                                charts::show(ui, &state.history, &state.notes);
-                                ui.add_space(14.0);
-                                self.show_notes_section(ui, &mut state);
-                            });
+        egui::CentralPanel::default().frame(egui::Frame::new().fill(theme::BACKGROUND)).show(
+            root_ui,
+            |ui| {
+                egui::Frame::new().inner_margin(egui::Margin::symmetric(28, 24)).show(ui, |ui| {
+                    egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+                        self.show_top(ui, &state);
+                        ui.add_space(14.0);
+                        self.show_today_summary(ui, &state);
+                        ui.add_space(12.0);
+                        ui.vertical_centered(|ui| {
+                            self.show_timer(ui, &state, accent);
+                            ui.add_space(12.0);
+                            self.show_controls(ui, &mut state, accent);
+                            ui.add_space(8.0);
+                            ui.label(
+                                egui::RichText::new(
+                                    "Space · start/pause   ·   R · reset   ·   S · skip",
+                                )
+                                .size(11.0)
+                                .color(theme::MUTED),
+                            );
+                        });
+                        ui.add_space(24.0);
+                        self.show_connection(ui, &mut state);
+                        ui.add_space(8.0);
+                        self.show_settings(ui, &mut state);
+                        self.show_weekly_reflection(ui, &mut state);
+                        charts::show(ui, &state.history, &state.notes);
+                        ui.add_space(14.0);
+                        self.show_notes_section(ui, &mut state);
                     });
-            });
+                });
+            },
+        );
 
         self.show_note_popup(&ctx, &mut state);
+        self.show_task_prompt(&ctx, &mut state);
         self.show_undo_toast(&ctx, &mut state);
         self.show_power_banner(&ctx, &mut state);
         self.show_import_dialog(&ctx, &mut state);
@@ -249,9 +277,7 @@ impl eframe::App for PomodoroApp {
             egui::Area::new(Id::new("storage-error"))
                 .anchor(Align2::LEFT_BOTTOM, Vec2::new(24.0, -20.0))
                 .show(&ctx, |ui| {
-                    ui.label(
-                        egui::RichText::new(message).color(Color32::from_rgb(243, 139, 168)),
-                    );
+                    ui.label(egui::RichText::new(message).color(Color32::from_rgb(243, 139, 168)));
                 });
         }
     }
@@ -267,12 +293,7 @@ impl PomodoroApp {
     fn show_top(&self, ui: &mut egui::Ui, state: &AppState) {
         ui.horizontal(|ui| {
             ui.add_space(4.0);
-            ui.label(
-                egui::RichText::new("POMODORO FOCUS")
-                    .size(15.0)
-                    .strong()
-                    .color(theme::TEXT),
-            );
+            ui.label(egui::RichText::new("POMODORO FOCUS").size(15.0).strong().color(theme::TEXT));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.label(
                     egui::RichText::new(format!(
@@ -290,17 +311,138 @@ impl PomodoroApp {
         ui.separator();
     }
 
+    fn show_today_summary(&self, ui: &mut egui::Ui, state: &AppState) {
+        egui::Frame::new()
+            .fill(theme::PANEL)
+            .corner_radius(16.0)
+            .inner_margin(egui::Margin::symmetric(20, 14))
+            .show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.heading("Today");
+                    if !state.settings.active_task.trim().is_empty() {
+                        ui.label(
+                            egui::RichText::new(format!(
+                                "Working on · {}",
+                                state.settings.active_task.trim()
+                            ))
+                            .color(theme::MUTED),
+                        );
+                    }
+                });
+                ui.add_space(8.0);
+                ui.columns(3, |columns| {
+                    columns[0]
+                        .label(egui::RichText::new("FOCUS TIME").size(10.0).color(theme::MUTED));
+                    columns[0].label(
+                        egui::RichText::new(readable_duration(state.history.today_seconds()))
+                            .size(20.0)
+                            .strong(),
+                    );
+
+                    columns[1]
+                        .label(egui::RichText::new("SESSIONS").size(10.0).color(theme::MUTED));
+                    columns[1].label(
+                        egui::RichText::new(state.history.today_sessions().to_string())
+                            .size(20.0)
+                            .strong(),
+                    );
+
+                    columns[2]
+                        .label(egui::RichText::new("DAILY GOAL").size(10.0).color(theme::MUTED));
+                    if state.settings.daily_goal_minutes == 0 {
+                        columns[2]
+                            .label(egui::RichText::new("Not set").size(16.0).color(theme::MUTED));
+                    } else {
+                        let goal_seconds = u64::from(state.settings.daily_goal_minutes) * 60;
+                        let today_seconds = state.history.today_seconds();
+                        columns[2].label(
+                            egui::RichText::new(format!(
+                                "{} / {}",
+                                readable_duration(today_seconds),
+                                readable_duration(goal_seconds)
+                            ))
+                            .size(16.0)
+                            .strong(),
+                        );
+                        columns[2].add(
+                            egui::ProgressBar::new(
+                                (today_seconds as f32 / goal_seconds as f32).clamp(0.0, 1.0),
+                            )
+                            .desired_width(140.0),
+                        );
+                    }
+                });
+            });
+    }
+
+    fn show_weekly_reflection(&mut self, ui: &mut egui::Ui, state: &mut AppState) {
+        if self.reflection_saved_snapshot != state.current_week_reflection {
+            self.reflection_saved_snapshot = state.current_week_reflection.clone();
+            self.reflection_week_start = state.current_week_reflection.week_start.clone();
+            self.reflection_went_well = state.current_week_reflection.went_well.clone();
+            self.reflection_adjust_next_time =
+                state.current_week_reflection.adjust_next_time.clone();
+            self.reflection_next_week_focus = state.current_week_reflection.next_week_focus.clone();
+        }
+        ui.add_space(16.0);
+        egui::Frame::new()
+            .fill(theme::PANEL)
+            .corner_radius(16.0)
+            .inner_margin(egui::Margin::symmetric(18, 14))
+            .show(ui, |ui| {
+                ui.heading("Weekly reflection");
+                ui.label(
+                    egui::RichText::new(format!(
+                        "Week of {} · {} focused",
+                        state.current_week_reflection.week_start,
+                        readable_duration(state.history.current_week_seconds())
+                    ))
+                    .size(12.0)
+                    .color(theme::MUTED),
+                );
+                ui.add_space(8.0);
+                ui.label("What went well?");
+                ui.add(
+                    egui::TextEdit::multiline(&mut self.reflection_went_well)
+                        .desired_rows(2)
+                        .hint_text("A small win counts."),
+                );
+                ui.label("What would you adjust next time?");
+                ui.add(
+                    egui::TextEdit::multiline(&mut self.reflection_adjust_next_time)
+                        .desired_rows(2)
+                        .hint_text("Keep it practical and kind."),
+                );
+                ui.label("One focus for next week");
+                ui.add(
+                    egui::TextEdit::singleline(&mut self.reflection_next_week_focus)
+                        .hint_text("A direction, not a pressure."),
+                );
+                if ui.button("Save reflection").clicked() {
+                    let reflection = crate::storage::WeeklyReflection {
+                        week_start: state.current_week_reflection.week_start.clone(),
+                        went_well: self.reflection_went_well.clone(),
+                        adjust_next_time: self.reflection_adjust_next_time.clone(),
+                        next_week_focus: self.reflection_next_week_focus.clone(),
+                    };
+                    match state.save_weekly_reflection(reflection) {
+                        Ok(()) => {
+                            self.reflection_saved_snapshot = state.current_week_reflection.clone();
+                            state.error_message = None;
+                        }
+                        Err(error) => state.error_message = Some(error),
+                    }
+                }
+            });
+    }
+
     fn show_timer(&self, ui: &mut egui::Ui, state: &AppState, accent: Color32) {
         let diameter = 414.0;
         let (rect, _) = ui.allocate_exact_size(Vec2::splat(diameter), Sense::hover());
         let painter = ui.painter_at(rect);
         let center = rect.center();
         let radius = diameter * 0.43;
-        painter.circle_stroke(
-            center,
-            radius,
-            Stroke::new(6.0, Color32::from_rgb(60, 64, 67)),
-        );
+        painter.circle_stroke(center, radius, Stroke::new(6.0, Color32::from_rgb(60, 64, 67)));
 
         let progress = state.timer.progress(&state.settings);
         let steps = ((progress * 200.0).ceil() as usize).max(1);
@@ -346,10 +488,7 @@ impl PomodoroApp {
             painter.text(
                 center + Vec2::new(0.0, 78.0),
                 Align2::CENTER_CENTER,
-                format!(
-                    "TODAY  {}",
-                    readable_duration(state.history.today_seconds())
-                ),
+                format!("TODAY  {}", readable_duration(state.history.today_seconds())),
                 FontId::proportional(14.0),
                 theme::MUTED,
             );
@@ -370,20 +509,13 @@ impl PomodoroApp {
                 bar_rect.min,
                 Vec2::new(bar_width * progress, bar_height),
             );
-            let fill_color = if progress >= 1.0 {
-                Color32::from_rgb(129, 201, 149)
-            } else {
-                accent
-            };
+            let fill_color =
+                if progress >= 1.0 { Color32::from_rgb(129, 201, 149) } else { accent };
             painter.rect_filled(filled, 3.0, fill_color);
             painter.text(
                 center + Vec2::new(0.0, 162.0),
                 Align2::CENTER_CENTER,
-                format!(
-                    "GOAL  {} / {}",
-                    readable_duration(today),
-                    readable_duration(goal_secs),
-                ),
+                format!("GOAL  {} / {}", readable_duration(today), readable_duration(goal_secs),),
                 FontId::proportional(11.0),
                 theme::MUTED,
             );
@@ -394,8 +526,7 @@ impl PomodoroApp {
 
     fn show_controls(&self, ui: &mut egui::Ui, state: &mut AppState, accent: Color32) {
         ui.horizontal(|ui| {
-            if action_button(ui, "Skip", Color32::from_rgb(60, 64, 67), theme::TEXT, 76.0)
-                .clicked()
+            if action_button(ui, "Skip", Color32::from_rgb(60, 64, 67), theme::TEXT, 76.0).clicked()
                 && let Err(error) = state.execute_command("skip")
             {
                 state.error_message = Some(error);
@@ -476,7 +607,12 @@ impl PomodoroApp {
                     }
                     if ui.button("Export data…").clicked() {
                         let root = std::path::Path::new(".");
-                        match export::write_to_disk(root, &state.history, &state.notes) {
+                        match export::write_to_disk(
+                            root,
+                            &state.history,
+                            &state.notes,
+                            &state.reflections,
+                        ) {
                             Ok(path) => {
                                 let display = path.display().to_string();
                                 ui.ctx().copy_text(display.clone());
@@ -485,8 +621,7 @@ impl PomodoroApp {
                                 ));
                             }
                             Err(error) => {
-                                state.error_message =
-                                    Some(format!("Export failed: {error}"));
+                                state.error_message = Some(format!("Export failed: {error}"));
                             }
                         }
                     }
@@ -519,27 +654,21 @@ impl PomodoroApp {
         ui.horizontal(|ui| {
             ui.heading("Session settings");
             ui.label(
-                egui::RichText::new("Changes save automatically · tray & fullscreen options on the phone")
-                    .size(12.0)
-                    .color(theme::MUTED),
+                egui::RichText::new(
+                    "Changes save automatically · tray & fullscreen options on the phone",
+                )
+                .size(12.0)
+                .color(theme::MUTED),
             );
         });
         let mut settings = state.settings.clone();
         let mut changed = false;
         ui.horizontal_wrapped(|ui| {
             changed |= setting_control(ui, "Focus · min", &mut settings.study_minutes, 1..=180);
-            changed |= setting_control(
-                ui,
-                "Short break · min",
-                &mut settings.short_break_minutes,
-                1..=60,
-            );
-            changed |= setting_control(
-                ui,
-                "Long break · min",
-                &mut settings.long_break_minutes,
-                1..=120,
-            );
+            changed |=
+                setting_control(ui, "Short break · min", &mut settings.short_break_minutes, 1..=60);
+            changed |=
+                setting_control(ui, "Long break · min", &mut settings.long_break_minutes, 1..=120);
             changed |= setting_control(
                 ui,
                 "Sessions per cycle",
@@ -554,8 +683,30 @@ impl PomodoroApp {
             );
         });
         ui.add_space(4.0);
+        ui.horizontal(|ui| {
+            ui.label("Active task");
+            let response = ui.add(
+                egui::TextEdit::singleline(&mut settings.active_task)
+                    .desired_width(280.0)
+                    .hint_text("What are you working on?"),
+            );
+            changed |= response.changed();
+        });
+        ui.add_space(4.0);
+        if ui.checkbox(&mut settings.auto_start_next, "Auto-start next session").changed() {
+            changed = true;
+        }
         if ui
-            .checkbox(&mut settings.auto_start_next, "Auto-start next session")
+            .checkbox(
+                &mut settings.desktop_notifications,
+                "Show Windows notifications when a session changes",
+            )
+            .changed()
+        {
+            changed = true;
+        }
+        if ui
+            .checkbox(&mut settings.completion_sound, "Play a sound when a session changes")
             .changed()
         {
             changed = true;
@@ -565,6 +716,12 @@ impl PomodoroApp {
                 &mut settings.remote_power_control,
                 "Allow remote shutdown/restart/lock from phone",
             )
+            .changed()
+        {
+            changed = true;
+        }
+        if ui
+            .checkbox(&mut settings.launch_at_startup, "Launch Pomodoro Focus when Windows starts")
             .changed()
         {
             changed = true;
@@ -650,20 +807,14 @@ impl PomodoroApp {
                         ui.add_space(4.0);
 
                         ui.label(
-                            egui::RichText::new("Accomplishment")
-                                .size(11.0)
-                                .color(theme::MUTED),
+                            egui::RichText::new("Accomplishment").size(11.0).color(theme::MUTED),
                         );
                         ui.add(
                             egui::TextEdit::singleline(&mut editing.accomplishment)
                                 .id(egui::Id::new(("note-edit-acc", &editing.id))),
                         );
 
-                        ui.label(
-                            egui::RichText::new("Subject")
-                                .size(11.0)
-                                .color(theme::MUTED),
-                        );
+                        ui.label(egui::RichText::new("Subject").size(11.0).color(theme::MUTED));
                         ui.add(
                             egui::TextEdit::singleline(&mut editing.subject)
                                 .id(egui::Id::new(("note-edit-subj", &editing.id))),
@@ -688,10 +839,8 @@ impl PomodoroApp {
                         });
                     } else {
                         ui.horizontal(|ui| {
-                            if let Some(subject) = row
-                                .subject
-                                .as_deref()
-                                .filter(|s| !s.trim().is_empty())
+                            if let Some(subject) =
+                                row.subject.as_deref().filter(|s| !s.trim().is_empty())
                             {
                                 ui.label(
                                     egui::RichText::new(subject)
@@ -751,11 +900,7 @@ impl PomodoroApp {
         }
 
         if let Some((id, accomplishment, subject)) = pending_edit {
-            let subject_opt = if subject.trim().is_empty() {
-                None
-            } else {
-                Some(subject)
-            };
+            let subject_opt = if subject.trim().is_empty() { None } else { Some(subject) };
             match state.update_note(&id, accomplishment, subject_opt) {
                 Ok(()) => {
                     self.editing_note = None;
@@ -776,6 +921,66 @@ impl PomodoroApp {
         }
     }
 
+    fn show_task_prompt(&mut self, ctx: &egui::Context, state: &mut AppState) {
+        if !state.task_prompt_pending {
+            return;
+        }
+
+        let mut continue_task = false;
+        let mut use_new_task = false;
+        let mut dismiss = false;
+        egui::Window::new("Break complete")
+            .id(Id::new("task-continuity-prompt"))
+            .collapsible(false)
+            .resizable(false)
+            .anchor(Align2::CENTER_CENTER, Vec2::ZERO)
+            .show(ctx, |ui| {
+                ui.label("Ready to return to focus?");
+                ui.label("Continue your task or choose what to work on next.");
+                ui.add_space(8.0);
+                ui.add(
+                    egui::TextEdit::singleline(&mut self.task_prompt_text)
+                        .desired_width(300.0)
+                        .hint_text("What are you working on?"),
+                );
+                ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                    if ui.button("Continue task").clicked() {
+                        continue_task = true;
+                    }
+                    if ui.button("Use task & start").clicked() {
+                        use_new_task = true;
+                    }
+                    if ui.button("Not now").clicked() {
+                        dismiss = true;
+                    }
+                });
+            });
+
+        if continue_task {
+            state.task_prompt_pending = false;
+            if !state.timer.running
+                && let Err(error) = state.execute_command("start")
+            {
+                state.error_message = Some(error);
+            }
+        } else if use_new_task {
+            match state.set_active_task(self.task_prompt_text.clone()) {
+                Ok(()) => {
+                    state.task_prompt_pending = false;
+                    if !state.timer.running
+                        && let Err(error) = state.execute_command("start")
+                    {
+                        state.error_message = Some(error);
+                    }
+                }
+                Err(error) => state.error_message = Some(error),
+            }
+        } else if dismiss {
+            state.task_prompt_pending = false;
+        }
+    }
+
     fn show_note_popup(&mut self, ctx: &egui::Context, state: &mut AppState) {
         let Some(pending_duration) = state.pending_note_duration else {
             return;
@@ -790,14 +995,14 @@ impl PomodoroApp {
                 ui.add_space(8.0);
                 ui.label("Accomplishment");
                 ui.add(
-                    egui::TextEdit::singleline(&mut self.note_text)
-                        .id(egui::Id::new("popup-acc")),
+                    egui::TextEdit::singleline(&mut self.note_text).id(egui::Id::new("popup-acc")),
                 );
                 ui.add_space(4.0);
                 ui.label("Subject tag (optional)");
                 ui.add(
                     egui::TextEdit::singleline(&mut self.subject_text)
-                        .id(egui::Id::new("popup-subj")),
+                        .id(egui::Id::new("popup-subj"))
+                        .hint_text(&state.settings.active_task),
                 );
                 ui.add_space(12.0);
                 ui.horizontal(|ui| {
@@ -864,10 +1069,9 @@ impl PomodoroApp {
     }
 
     fn show_power_banner(&mut self, ctx: &egui::Context, state: &mut AppState) {
-        let (Some(action), Some(seconds)) = (
-            state.pending_power_action.as_ref().map(|p| p.action),
-            state.pending_power_seconds(),
-        ) else {
+        let (Some(action), Some(seconds)) =
+            (state.pending_power_action.as_ref().map(|p| p.action), state.pending_power_seconds())
+        else {
             return;
         };
 
@@ -914,9 +1118,7 @@ impl PomodoroApp {
             .default_width(520.0)
             .anchor(Align2::CENTER_CENTER, Vec2::ZERO)
             .show(ctx, |ui| {
-                ui.label(
-                    "Paste the full path to an `all.json` file exported from this app.",
-                );
+                ui.label("Paste the full path to an `all.json` file exported from this app.");
                 ui.add(
                     egui::TextEdit::singleline(&mut self.import_path)
                         .hint_text("C:\\Users\\You\\focusv2\\exports\\2026-10-18-1200\\all.json")
@@ -942,7 +1144,7 @@ impl PomodoroApp {
                 if self.import_mode == import::Mode::Replace {
                     ui.label(
                         egui::RichText::new(
-                            "⚠ Replace will erase your current history and notes.",
+                            "⚠ Replace will erase your current history, notes, and reflections.",
                         )
                         .color(Color32::from_rgb(243, 139, 168))
                         .size(12.0),
@@ -995,7 +1197,7 @@ impl PomodoroApp {
         }
     }
 
-    fn try_import_apply(&self, state: &mut AppState) {
+    fn try_import_apply(&mut self, state: &mut AppState) {
         let path = self.import_path.trim();
         if path.is_empty() {
             state.error_message = Some("Enter a file path first".to_owned());
@@ -1018,26 +1220,50 @@ impl PomodoroApp {
 
         let previous_history = state.history.clone();
         let previous_notes = state.notes.clone();
+        let previous_reflections = state.reflections.clone();
 
         let mut history = std::mem::take(&mut state.history);
         let mut notes = std::mem::take(&mut state.notes);
-        let report = import::apply(bundle, &mut history, &mut notes, self.import_mode);
+        let mut reflections = std::mem::take(&mut state.reflections);
+        let report = import::apply_with_reflections(
+            bundle,
+            &mut history,
+            &mut notes,
+            &mut reflections,
+            self.import_mode,
+        );
         state.history = history;
         state.notes = notes;
+        state.reflections = reflections;
 
         if let Err(error) = state.storage.save_history(&state.history) {
             state.history = previous_history;
             state.notes = previous_notes;
+            state.reflections = previous_reflections;
             state.error_message = Some(format!("Could not save history: {error}"));
             return;
         }
         if let Err(error) = state.storage.save_notes(&state.notes) {
             state.history = previous_history;
             state.notes = previous_notes;
+            state.reflections = previous_reflections;
             let _ = state.storage.save_history(&state.history);
             state.error_message = Some(format!("Could not save notes: {error}"));
             return;
         }
+        if let Err(error) = state.storage.save_reflections(&state.reflections) {
+            state.history = previous_history;
+            state.notes = previous_notes;
+            state.reflections = previous_reflections;
+            let _ = state.storage.save_history(&state.history);
+            let _ = state.storage.save_notes(&state.notes);
+            let _ = state.storage.save_reflections(&state.reflections);
+            state.error_message = Some(format!("Could not save weekly reflections: {error}"));
+            return;
+        }
+        state.current_week_reflection =
+            state.reflections.for_week(&crate::storage::WeeklyReflection::current_week_start());
+        self.reflection_week_start.clear();
 
         state.error_message = Some(format!(
             "Imported: +{} days, {} days updated, +{} notes, {} notes skipped",
@@ -1059,14 +1285,8 @@ fn setting_control(
     let mut changed = false;
     ui.vertical(|ui| {
         ui.label(egui::RichText::new(label).size(12.0).color(theme::MUTED));
-        changed |= ui
-            .add(
-                egui::DragValue::new(value)
-                    .range(range)
-                    .speed(0.1)
-                    .suffix(" min"),
-            )
-            .changed();
+        changed |=
+            ui.add(egui::DragValue::new(value).range(range).speed(0.1).suffix(" min")).changed();
     });
     changed
 }
@@ -1103,11 +1323,7 @@ fn mix_color(from: Color32, to: Color32, amount: f32) -> Color32 {
 fn readable_duration(seconds: u64) -> String {
     let hours = seconds / 3600;
     let minutes = seconds % 3600 / 60;
-    if hours > 0 {
-        format!("{hours}h {minutes:02}m")
-    } else {
-        format!("{minutes}m")
-    }
+    if hours > 0 { format!("{hours}h {minutes:02}m") } else { format!("{minutes}m") }
 }
 
 fn load_window_icon() -> Option<std::sync::Arc<egui::IconData>> {
@@ -1130,10 +1346,7 @@ pub fn native_options(settings: &crate::storage::Settings) -> eframe::NativeOpti
     if let Some(icon) = icon {
         viewport = viewport.with_icon(icon);
     }
-    eframe::NativeOptions {
-        viewport,
-        ..Default::default()
-    }
+    eframe::NativeOptions { viewport, ..Default::default() }
 }
 
 pub fn create_app(ctx: &eframe::CreationContext<'_>) -> Result<PomodoroApp, getrandom::Error> {

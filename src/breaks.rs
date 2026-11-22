@@ -56,11 +56,9 @@ mod tests {
     #[test]
     fn rotation_wraps_around() {
         let first = current_suggestion(Mode::ShortBreak, 0).unwrap();
-        let wrapped = current_suggestion(
-            Mode::ShortBreak,
-            ROTATE_SECS * SHORT_BREAK_TIPS.len() as u64,
-        )
-        .unwrap();
+        let wrapped =
+            current_suggestion(Mode::ShortBreak, ROTATE_SECS * SHORT_BREAK_TIPS.len() as u64)
+                .unwrap();
         assert_eq!(first, wrapped);
     }
 

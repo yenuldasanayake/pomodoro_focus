@@ -1,10 +1,11 @@
 use crate::storage::Settings;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::time::{Duration, Instant};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum Mode {
+    #[default]
     Study,
     ShortBreak,
     LongBreak,
@@ -42,6 +43,27 @@ pub struct Timer {
     settings_snapshot: Settings,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TimerSnapshot {
+    pub mode: Mode,
+    pub remaining_seconds: u64,
+    pub completed_study_sessions: u32,
+    pub running: bool,
+    pub elapsed_in_mode: u64,
+}
+
+impl Default for TimerSnapshot {
+    fn default() -> Self {
+        Self {
+            mode: Mode::Study,
+            remaining_seconds: 25 * 60,
+            completed_study_sessions: 0,
+            running: false,
+            elapsed_in_mode: 0,
+        }
+    }
+}
+
 impl Timer {
     pub fn new(settings: &Settings) -> Self {
         Self {
@@ -55,6 +77,27 @@ impl Timer {
             study_seconds_since_update: 0,
             settings_snapshot: settings.clone(),
         }
+    }
+
+    pub fn snapshot(&self) -> TimerSnapshot {
+        TimerSnapshot {
+            mode: self.mode,
+            remaining_seconds: self.remaining_seconds,
+            completed_study_sessions: self.completed_study_sessions,
+            running: self.running,
+            elapsed_in_mode: self.elapsed_in_mode,
+        }
+    }
+
+    pub fn restore(settings: &Settings, snapshot: TimerSnapshot) -> Self {
+        let mut timer = Self::new(settings);
+        timer.mode = snapshot.mode;
+        timer.remaining_seconds =
+            snapshot.remaining_seconds.clamp(1, snapshot.mode.duration_seconds(settings));
+        timer.completed_study_sessions = snapshot.completed_study_sessions;
+        timer.running = snapshot.running;
+        timer.elapsed_in_mode = snapshot.elapsed_in_mode;
+        timer
     }
 
     pub fn start(&mut self) {
@@ -93,6 +136,7 @@ impl Timer {
         if completed == Mode::Study {
             self.completed_study_sessions += 1;
         }
+        self.running = false;
         self.advance(settings);
         Some(completed)
     }
@@ -166,10 +210,7 @@ mod tests {
 
     #[test]
     fn study_sessions_schedule_long_break_at_configured_interval() {
-        let settings = Settings {
-            sessions_before_long_break: 2,
-            ..Settings::default()
-        };
+        let settings = Settings { sessions_before_long_break: 2, ..Settings::default() };
         let mut timer = Timer::new(&settings);
         timer.start();
 
@@ -177,10 +218,12 @@ mod tests {
         assert_eq!(timer.update(&settings), Some(Mode::Study));
         assert_eq!(timer.mode, Mode::ShortBreak);
 
+        timer.start();
         timer.remaining_seconds = 0;
         assert_eq!(timer.update(&settings), Some(Mode::ShortBreak));
         assert_eq!(timer.mode, Mode::Study);
 
+        timer.start();
         timer.remaining_seconds = 0;
         assert_eq!(timer.update(&settings), Some(Mode::Study));
         assert_eq!(timer.mode, Mode::LongBreak);
@@ -203,18 +246,12 @@ mod tests {
 
     #[test]
     fn changing_duration_mid_session_preserves_elapsed_time() {
-        let settings_25 = Settings {
-            study_minutes: 25,
-            ..Settings::default()
-        };
+        let settings_25 = Settings { study_minutes: 25, ..Settings::default() };
         let mut timer = Timer::new(&settings_25);
         timer.start();
         timer.remaining_seconds = 15 * 60;
 
-        let settings_30 = Settings {
-            study_minutes: 30,
-            ..Settings::default()
-        };
+        let settings_30 = Settings { study_minutes: 30, ..Settings::default() };
         timer.set_settings(&settings_30);
 
         assert_eq!(timer.remaining_seconds, 20 * 60);
@@ -223,17 +260,11 @@ mod tests {
 
     #[test]
     fn changing_duration_while_paused_resets_to_new_total() {
-        let settings_25 = Settings {
-            study_minutes: 25,
-            ..Settings::default()
-        };
+        let settings_25 = Settings { study_minutes: 25, ..Settings::default() };
         let mut timer = Timer::new(&settings_25);
         timer.remaining_seconds = 15 * 60;
 
-        let settings_30 = Settings {
-            study_minutes: 30,
-            ..Settings::default()
-        };
+        let settings_30 = Settings { study_minutes: 30, ..Settings::default() };
         timer.set_settings(&settings_30);
 
         assert_eq!(timer.remaining_seconds, 30 * 60);
@@ -242,18 +273,12 @@ mod tests {
 
     #[test]
     fn shortening_below_elapsed_keeps_at_least_one_second() {
-        let settings_25 = Settings {
-            study_minutes: 25,
-            ..Settings::default()
-        };
+        let settings_25 = Settings { study_minutes: 25, ..Settings::default() };
         let mut timer = Timer::new(&settings_25);
         timer.start();
         timer.remaining_seconds = 60;
 
-        let settings_1 = Settings {
-            study_minutes: 1,
-            ..Settings::default()
-        };
+        let settings_1 = Settings { study_minutes: 1, ..Settings::default() };
         timer.set_settings(&settings_1);
 
         assert_eq!(timer.remaining_seconds, 1);

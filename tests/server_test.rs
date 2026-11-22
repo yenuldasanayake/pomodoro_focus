@@ -1,7 +1,7 @@
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use http_body_util::BodyExt;
-use pomodoro_focus::server::{build_router, generate_pin, AppState, SharedState};
+use pomodoro_focus::server::{AppState, SharedState, build_router, generate_pin};
 use pomodoro_focus::storage::Storage;
 use std::{
     net::SocketAddr,
@@ -15,10 +15,7 @@ fn temp_root(name: &str) -> PathBuf {
     let unique = format!(
         "pomodoro-server-test-{}-{}",
         name,
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
     );
     path.push(unique);
     path
@@ -48,15 +45,8 @@ async fn status_returns_shape() {
     let (state, root, _pin) = test_state("status");
     let app = build_router(state);
 
-    let response = app
-        .oneshot(
-            Request::builder()
-                .uri("/status")
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
+    let response =
+        app.oneshot(Request::builder().uri("/status").body(Body::empty()).unwrap()).await.unwrap();
 
     assert_eq!(response.status(), StatusCode::OK);
     let json: serde_json::Value = body_json(response.into_body()).await;
@@ -165,9 +155,7 @@ async fn add_note_returns_new_id() {
     let (state, root, pin) = test_state("add-note");
     let app = build_router(state);
 
-    let body = format!(
-        r#"{{"token":"{pin}","accomplishment":"Wrote tests","subject":"Rust"}}"#
-    );
+    let body = format!(r#"{{"token":"{pin}","accomplishment":"Wrote tests","subject":"Rust"}}"#);
     let response = app
         .oneshot(
             Request::builder()
@@ -195,9 +183,8 @@ async fn update_note_with_unknown_id_returns_400() {
     let (state, root, pin) = test_state("update-unknown");
     let app = build_router(state);
 
-    let body = format!(
-        r#"{{"token":"{pin}","id":"nonexistent","accomplishment":"x","subject":""}}"#
-    );
+    let body =
+        format!(r#"{{"token":"{pin}","id":"nonexistent","accomplishment":"x","subject":""}}"#);
     let response = app
         .oneshot(
             Request::builder()

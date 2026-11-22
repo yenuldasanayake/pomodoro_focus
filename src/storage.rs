@@ -1,4 +1,4 @@
-use chrono::{Local, NaiveDate};
+use chrono::{Datelike, Duration, Local, NaiveDate};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::BTreeMap,
@@ -21,6 +21,14 @@ pub struct Settings {
     pub remote_import: bool,
     pub start_minimized: bool,
     pub close_to_tray: bool,
+    #[serde(default)]
+    pub active_task: String,
+    #[serde(default)]
+    pub desktop_notifications: bool,
+    #[serde(default)]
+    pub completion_sound: bool,
+    #[serde(default)]
+    pub launch_at_startup: bool,
 }
 
 impl Default for Settings {
@@ -38,6 +46,10 @@ impl Default for Settings {
             remote_import: false,
             start_minimized: false,
             close_to_tray: false,
+            active_task: String::new(),
+            desktop_notifications: true,
+            completion_sound: true,
+            launch_at_startup: false,
         }
     }
 }
@@ -85,11 +97,7 @@ mod settings_tests {
 
     #[test]
     fn pin_and_port_round_trip() {
-        let settings = Settings {
-            pin: "12345678".to_owned(),
-            port: 51234,
-            ..Settings::default()
-        };
+        let settings = Settings { pin: "12345678".to_owned(), port: 51234, ..Settings::default() };
         let saved = serde_json::to_string(&settings).unwrap();
         let loaded: Settings = serde_json::from_str(&saved).unwrap();
         assert_eq!(loaded.pin, "12345678");
@@ -98,11 +106,7 @@ mod settings_tests {
 
     #[test]
     fn sanitize_rejects_malformed_pin_and_privileged_port() {
-        let mut settings = Settings {
-            pin: "abc".to_owned(),
-            port: 80,
-            ..Settings::default()
-        };
+        let mut settings = Settings { pin: "abc".to_owned(), port: 80, ..Settings::default() };
         settings.sanitize();
         assert!(settings.pin.is_empty());
         assert_eq!(settings.port, 0);
@@ -110,11 +114,8 @@ mod settings_tests {
 
     #[test]
     fn sanitize_accepts_valid_pin_and_high_port() {
-        let mut settings = Settings {
-            pin: "98765432".to_owned(),
-            port: 51234,
-            ..Settings::default()
-        };
+        let mut settings =
+            Settings { pin: "98765432".to_owned(), port: 51234, ..Settings::default() };
         settings.sanitize();
         assert_eq!(settings.pin, "98765432");
         assert_eq!(settings.port, 51234);
@@ -129,24 +130,15 @@ mod settings_tests {
 
     #[test]
     fn goal_is_clamped_when_nonzero() {
-        let mut settings = Settings {
-            daily_goal_minutes: 5,
-            ..Settings::default()
-        };
+        let mut settings = Settings { daily_goal_minutes: 5, ..Settings::default() };
         settings.sanitize();
         assert_eq!(settings.daily_goal_minutes, 15);
 
-        let mut settings = Settings {
-            daily_goal_minutes: 5000,
-            ..Settings::default()
-        };
+        let mut settings = Settings { daily_goal_minutes: 5000, ..Settings::default() };
         settings.sanitize();
         assert_eq!(settings.daily_goal_minutes, 720);
 
-        let mut settings = Settings {
-            daily_goal_minutes: 0,
-            ..Settings::default()
-        };
+        let mut settings = Settings { daily_goal_minutes: 0, ..Settings::default() };
         settings.sanitize();
         assert_eq!(settings.daily_goal_minutes, 0);
     }
@@ -169,6 +161,12 @@ mod settings_tests {
         assert!(!settings.start_minimized);
         assert!(!settings.close_to_tray);
     }
+
+    #[test]
+    fn startup_setting_defaults_off() {
+        let settings: Settings = serde_json::from_str(r#"{}"#).unwrap();
+        assert!(!settings.launch_at_startup);
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -176,6 +174,8 @@ mod settings_tests {
 pub struct History {
     pub version: u32,
     pub daily_seconds: BTreeMap<String, u64>,
+    #[serde(default)]
+    pub daily_sessions: BTreeMap<String, u32>,
 }
 
 impl Default for History {
@@ -183,6 +183,7 @@ impl Default for History {
         Self {
             version: Self::CURRENT_VERSION,
             daily_seconds: BTreeMap::new(),
+            daily_sessions: BTreeMap::new(),
         }
     }
 }
@@ -191,10 +192,7 @@ impl History {
     pub const CURRENT_VERSION: u32 = 1;
 
     pub fn today_seconds(&self) -> u64 {
-        self.daily_seconds
-            .get(&Local::now().date_naive().to_string())
-            .copied()
-            .unwrap_or_default()
+        self.daily_seconds.get(&Local::now().date_naive().to_string()).copied().unwrap_or_default()
     }
 
     pub fn add_today(&mut self, seconds: u64) {
@@ -202,11 +200,41 @@ impl History {
         *self.daily_seconds.entry(day).or_default() += seconds;
     }
 
+    pub fn add_completed_session_today(&mut self) {
+        let day = Local::now().date_naive().to_string();
+        *self.daily_sessions.entry(day).or_default() += 1;
+    }
+
+    pub fn today_sessions(&self) -> u32 {
+        self.daily_sessions.get(&Local::now().date_naive().to_string()).copied().unwrap_or_default()
+    }
+
+    pub fn current_week_seconds(&self) -> u64 {
+        let today = Local::now().date_naive();
+        let monday = today - Duration::days(i64::from(today.weekday().num_days_from_monday()));
+        (0..=today.signed_duration_since(monday).num_days())
+            .map(|offset| {
+                let day = monday + Duration::days(offset);
+                self.daily_seconds.get(&day.to_string()).copied().unwrap_or_default()
+            })
+            .sum()
+    }
+
     pub fn best_day(&self) -> Option<(&str, u64)> {
         self.daily_seconds
             .iter()
             .max_by_key(|(_, seconds)| *seconds)
             .map(|(day, seconds)| (day.as_str(), *seconds))
+    }
+
+    pub fn period_seconds(&self, days: u32) -> u64 {
+        let today = Local::now().date_naive();
+        (0..days)
+            .map(|offset| {
+                let day = today - Duration::days(i64::from(offset));
+                self.daily_seconds.get(&day.to_string()).copied().unwrap_or_default()
+            })
+            .sum()
     }
 
     pub fn current_streak(&self) -> u32 {
@@ -227,9 +255,7 @@ impl History {
     }
 
     fn has_study_on(&self, day: NaiveDate) -> bool {
-        self.daily_seconds
-            .get(&day.to_string())
-            .is_some_and(|seconds| *seconds > 0)
+        self.daily_seconds.get(&day.to_string()).is_some_and(|seconds| *seconds > 0)
     }
 }
 
@@ -250,6 +276,50 @@ pub struct StudyNote {
 #[serde(default)]
 pub struct Notes {
     pub entries: Vec<StudyNote>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct WeeklyReflections {
+    pub entries: Vec<WeeklyReflection>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct WeeklyReflection {
+    pub week_start: String,
+    pub went_well: String,
+    pub adjust_next_time: String,
+    pub next_week_focus: String,
+}
+
+impl WeeklyReflection {
+    pub fn current_week_start() -> String {
+        let today = Local::now().date_naive();
+        let monday = today - Duration::days(i64::from(today.weekday().num_days_from_monday()));
+        monday.to_string()
+    }
+}
+
+impl WeeklyReflections {
+    pub fn for_week(&self, week_start: &str) -> WeeklyReflection {
+        self.entries.iter().find(|entry| entry.week_start == week_start).cloned().unwrap_or_else(
+            || WeeklyReflection {
+                week_start: week_start.to_owned(),
+                ..WeeklyReflection::default()
+            },
+        )
+    }
+
+    pub fn upsert(&mut self, reflection: WeeklyReflection) {
+        if let Some(existing) =
+            self.entries.iter_mut().find(|entry| entry.week_start == reflection.week_start)
+        {
+            *existing = reflection;
+        } else {
+            self.entries.push(reflection);
+        }
+    }
 }
 
 impl Notes {
@@ -300,13 +370,7 @@ mod notes_tests {
     #[test]
     fn ensure_ids_fills_missing_ids() {
         let mut notes = Notes {
-            entries: vec![
-                StudyNote {
-                    id: String::new(),
-                    ..sample_note("")
-                },
-                sample_note("kept"),
-            ],
+            entries: vec![StudyNote { id: String::new(), ..sample_note("") }, sample_note("kept")],
         };
 
         assert!(notes.ensure_ids());
@@ -317,9 +381,7 @@ mod notes_tests {
 
     #[test]
     fn find_index_locates_by_id() {
-        let notes = Notes {
-            entries: vec![sample_note("a"), sample_note("b")],
-        };
+        let notes = Notes { entries: vec![sample_note("a"), sample_note("b")] };
         assert_eq!(notes.find_index("a"), Some(0));
         assert_eq!(notes.find_index("b"), Some(1));
         assert_eq!(notes.find_index("missing"), None);
@@ -387,6 +449,20 @@ mod history_tests {
         let mut history = History::default();
         history.daily_seconds.insert(today.to_string(), 0);
         assert_eq!(history.current_streak(), 0);
+    }
+
+    #[test]
+    fn completed_sessions_are_counted_for_today() {
+        let mut history = History::default();
+        history.add_completed_session_today();
+        history.add_completed_session_today();
+        assert_eq!(history.today_sessions(), 2);
+    }
+
+    #[test]
+    fn older_history_without_session_counts_still_loads() {
+        let history: History = serde_json::from_str(r#"{"version":1,"daily_seconds":{}}"#).unwrap();
+        assert!(history.daily_sessions.is_empty());
     }
 }
 
@@ -466,8 +542,7 @@ impl Storage {
     }
 
     pub fn load_history(&self) -> io::Result<History> {
-        let mut history: History =
-            self.load_or_default(Path::new("data").join("history.json"))?;
+        let mut history: History = self.load_or_default(Path::new("data").join("history.json"))?;
         if history.version == 0 {
             history.version = History::CURRENT_VERSION;
         }
@@ -490,6 +565,22 @@ impl Storage {
 
     pub fn save_notes(&self, notes: &Notes) -> io::Result<()> {
         self.save(Path::new("data").join("notes.json"), notes)
+    }
+
+    pub fn load_reflections(&self) -> io::Result<WeeklyReflections> {
+        self.load_or_default(Path::new("data").join("reflections.json"))
+    }
+
+    pub fn save_reflections(&self, reflections: &WeeklyReflections) -> io::Result<()> {
+        self.save(Path::new("data").join("reflections.json"), reflections)
+    }
+
+    pub fn load_timer(&self) -> io::Result<crate::timer::TimerSnapshot> {
+        self.load_or_default("timer.json")
+    }
+
+    pub fn save_timer(&self, snapshot: &crate::timer::TimerSnapshot) -> io::Result<()> {
+        self.save("timer.json", snapshot)
     }
 
     fn load_or_default<T>(&self, relative: impl AsRef<Path>) -> io::Result<T>
@@ -593,6 +684,45 @@ mod storage_tests {
     }
 
     #[test]
+    fn round_trip_weekly_reflections_through_disk() {
+        let root = temp_root("reflection-roundtrip");
+        let storage = Storage::new(&root);
+        let mut reflections = WeeklyReflections::default();
+        reflections.upsert(WeeklyReflection {
+            week_start: "2026-11-16".to_owned(),
+            went_well: "Finished a chapter".to_owned(),
+            adjust_next_time: "Take longer breaks".to_owned(),
+            next_week_focus: "Practice Rust".to_owned(),
+        });
+
+        storage.save_reflections(&reflections).unwrap();
+        let loaded = storage.load_reflections().unwrap();
+        let saved = loaded.for_week("2026-11-16");
+        assert_eq!(saved.went_well, "Finished a chapter");
+        assert_eq!(saved.next_week_focus, "Practice Rust");
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn weekly_reflection_upsert_keeps_one_entry_per_week() {
+        let mut reflections = WeeklyReflections::default();
+        reflections.upsert(WeeklyReflection {
+            week_start: "2026-11-16".to_owned(),
+            went_well: "First".to_owned(),
+            ..WeeklyReflection::default()
+        });
+        reflections.upsert(WeeklyReflection {
+            week_start: "2026-11-16".to_owned(),
+            went_well: "Updated".to_owned(),
+            ..WeeklyReflection::default()
+        });
+
+        assert_eq!(reflections.entries.len(), 1);
+        assert_eq!(reflections.entries[0].went_well, "Updated");
+    }
+
+    #[test]
     fn edit_updates_note_on_disk() {
         let root = temp_root("notes-edit");
         let storage = Storage::new(&root);
@@ -614,10 +744,7 @@ mod storage_tests {
 
         let loaded = storage.load_notes().unwrap();
         assert_eq!(loaded.entries[0].accomplishment, "Edited");
-        assert_eq!(
-            loaded.entries[0].updated_at.as_deref(),
-            Some("2026-10-17T11:00:00Z")
-        );
+        assert_eq!(loaded.entries[0].updated_at.as_deref(), Some("2026-10-17T11:00:00Z"));
 
         let _ = fs::remove_dir_all(&root);
     }

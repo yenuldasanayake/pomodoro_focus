@@ -1,7 +1,7 @@
 //! Serialization for `/export/*` endpoints and the desktop "Export data…"
 //! button. Everything here is pure data-in, bytes-out so it's easy to test.
 
-use crate::storage::{History, Notes};
+use crate::storage::{History, Notes, WeeklyReflections};
 use serde::Serialize;
 
 /// Version stamp written into `all.json` so future restores can tell which
@@ -14,14 +14,16 @@ pub struct ExportBundle<'a> {
     pub exported_at: String,
     pub history: &'a History,
     pub notes: &'a Notes,
+    pub reflections: &'a WeeklyReflections,
 }
 
-pub fn all_json(history: &History, notes: &Notes) -> String {
+pub fn all_json(history: &History, notes: &Notes, reflections: &WeeklyReflections) -> String {
     let bundle = ExportBundle {
         version: EXPORT_VERSION,
         exported_at: chrono::Local::now().to_rfc3339(),
         history,
         notes,
+        reflections,
     };
     // This cannot fail: all field types are serde-compatible primitives.
     serde_json::to_string_pretty(&bundle).unwrap_or_else(|_| "{}".to_owned())
@@ -45,8 +47,7 @@ pub fn history_csv(history: &History) -> String {
 /// CSV of `notes.entries`, oldest first.
 /// Columns: id,timestamp,duration_seconds,subject,accomplishment,updated_at
 pub fn notes_csv(notes: &Notes) -> String {
-    let mut out =
-        String::from("id,timestamp,duration_seconds,subject,accomplishment,updated_at\n");
+    let mut out = String::from("id,timestamp,duration_seconds,subject,accomplishment,updated_at\n");
     for note in &notes.entries {
         out.push_str(&csv_field(&note.id));
         out.push(',');
@@ -67,20 +68,11 @@ pub fn notes_csv(notes: &Notes) -> String {
 /// Combined CSV: one row per note, with the day's total attached.
 /// Columns: date,today_seconds,id,timestamp,duration_seconds,subject,accomplishment
 pub fn all_csv(history: &History, notes: &Notes) -> String {
-    let mut out = String::from(
-        "date,today_seconds,id,timestamp,duration_seconds,subject,accomplishment\n",
-    );
+    let mut out =
+        String::from("date,today_seconds,id,timestamp,duration_seconds,subject,accomplishment\n");
     for note in &notes.entries {
-        let day = note
-            .timestamp
-            .get(..10)
-            .unwrap_or("")
-            .to_owned();
-        let day_total = history
-            .daily_seconds
-            .get(&day)
-            .copied()
-            .unwrap_or_default();
+        let day = note.timestamp.get(..10).unwrap_or("").to_owned();
+        let day_total = history.daily_seconds.get(&day).copied().unwrap_or_default();
         out.push_str(&csv_field(&day));
         out.push(',');
         out.push_str(&day_total.to_string());
@@ -102,9 +94,7 @@ pub fn all_csv(history: &History, notes: &Notes) -> String {
 /// Quote a CSV field if it contains a comma, quote, or newline. Doubles any
 /// embedded quotes per RFC 4180.
 fn csv_field(value: &str) -> String {
-    let needs_quotes = value
-        .chars()
-        .any(|c| matches!(c, ',' | '"' | '\n' | '\r'));
+    let needs_quotes = value.chars().any(|c| matches!(c, ',' | '"' | '\n' | '\r'));
     if !needs_quotes {
         return value.to_owned();
     }
@@ -128,6 +118,7 @@ pub fn write_to_disk(
     root: &std::path::Path,
     history: &History,
     notes: &Notes,
+    reflections: &WeeklyReflections,
 ) -> std::io::Result<std::path::PathBuf> {
     let stamp = chrono::Local::now().format("%Y-%m-%d-%H%M%S").to_string();
     let dir = root.join("exports").join(&stamp);
@@ -136,7 +127,7 @@ pub fn write_to_disk(
     std::fs::write(dir.join("history.csv"), history_csv(history))?;
     std::fs::write(dir.join("notes.csv"), notes_csv(notes))?;
     std::fs::write(dir.join("all.csv"), all_csv(history, notes))?;
-    std::fs::write(dir.join("all.json"), all_json(history, notes))?;
+    std::fs::write(dir.join("all.json"), all_json(history, notes, reflections))?;
 
     Ok(dir)
 }
@@ -144,7 +135,7 @@ pub fn write_to_disk(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::storage::{History, Notes, StudyNote};
+    use crate::storage::{History, Notes, StudyNote, WeeklyReflections};
     use std::collections::BTreeMap;
 
     fn sample_history() -> History {
@@ -188,17 +179,12 @@ mod tests {
 
     #[test]
     fn all_json_round_trips() {
-        let json = all_json(&sample_history(), &sample_notes());
+        let json = all_json(&sample_history(), &sample_notes(), &WeeklyReflections::default());
         let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed["version"], EXPORT_VERSION);
-        assert_eq!(
-            parsed["history"]["daily_seconds"]["2026-10-01"],
-            1500
-        );
-        assert_eq!(
-            parsed["notes"]["entries"][0]["accomplishment"],
-            "Wrote tests, fixed bugs"
-        );
+        assert_eq!(parsed["history"]["daily_seconds"]["2026-10-01"], 1500);
+        assert_eq!(parsed["notes"]["entries"][0]["accomplishment"], "Wrote tests, fixed bugs");
+        assert_eq!(parsed["reflections"]["entries"].as_array().unwrap().len(), 0);
     }
 
     #[test]
@@ -213,14 +199,13 @@ mod tests {
     fn write_to_disk_creates_all_files() {
         let root = std::env::temp_dir().join(format!(
             "pomodoro-export-test-{}",
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
         ));
         std::fs::create_dir_all(&root).unwrap();
 
-        let dir = write_to_disk(&root, &sample_history(), &sample_notes()).unwrap();
+        let dir =
+            write_to_disk(&root, &sample_history(), &sample_notes(), &WeeklyReflections::default())
+                .unwrap();
         assert!(dir.join("history.csv").exists());
         assert!(dir.join("notes.csv").exists());
         assert!(dir.join("all.csv").exists());
