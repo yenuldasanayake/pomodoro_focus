@@ -13,9 +13,6 @@ pub struct Settings {
     pub short_break_minutes: u32,
     pub long_break_minutes: u32,
     pub sessions_before_long_break: u32,
-    pub escape_exits_fullscreen: bool,
-    pub block_alt_tab: bool,
-    pub sites_blocked: bool,
     pub pin: String,
     pub port: u16,
     pub auto_start_next: bool,
@@ -33,9 +30,6 @@ impl Default for Settings {
             short_break_minutes: 5,
             long_break_minutes: 15,
             sessions_before_long_break: 4,
-            escape_exits_fullscreen: false,
-            block_alt_tab: false,
-            sites_blocked: false,
             pin: String::new(),
             port: 0,
             auto_start_next: false,
@@ -73,15 +67,12 @@ mod settings_tests {
     use super::Settings;
 
     #[test]
-    fn older_settings_without_escape_option_default_to_disabled() {
+    fn older_settings_keep_optional_controls_disabled() {
         let settings: Settings = serde_json::from_str(
             r#"{"study_minutes":25,"short_break_minutes":5,"long_break_minutes":15,"sessions_before_long_break":4}"#,
         )
         .unwrap();
 
-        assert!(!settings.escape_exits_fullscreen);
-        assert!(!settings.block_alt_tab);
-        assert!(!settings.sites_blocked);
         assert!(settings.pin.is_empty());
         assert_eq!(settings.port, 0);
         assert!(!settings.auto_start_next);
@@ -90,28 +81,6 @@ mod settings_tests {
         assert!(!settings.remote_import);
         assert!(!settings.start_minimized);
         assert!(!settings.close_to_tray);
-    }
-
-    #[test]
-    fn alt_tab_block_setting_is_persisted() {
-        let settings = Settings {
-            block_alt_tab: true,
-            ..Settings::default()
-        };
-        let saved = serde_json::to_string(&settings).unwrap();
-        let loaded: Settings = serde_json::from_str(&saved).unwrap();
-        assert!(loaded.block_alt_tab);
-    }
-
-    #[test]
-    fn sites_blocked_setting_is_persisted() {
-        let settings = Settings {
-            sites_blocked: true,
-            ..Settings::default()
-        };
-        let saved = serde_json::to_string(&settings).unwrap();
-        let loaded: Settings = serde_json::from_str(&saved).unwrap();
-        assert!(loaded.sites_blocked);
     }
 
     #[test]

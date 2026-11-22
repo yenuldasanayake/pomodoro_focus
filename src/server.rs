@@ -1,5 +1,5 @@
 use crate::{
-    alt_tab, audio, breaks, export, site_blocker, system,
+    audio, breaks, export, system,
     storage::{generate_id, History, Notes, Settings, Storage, StudyNote},
     timer::{Mode, Timer},
 };
@@ -54,10 +54,6 @@ pub struct AppState {
     pub port: u16,
     pub port_change_pending: bool,
     pub local_url: String,
-    pub sites_blocked: bool,
-    pub hosts_block_active: bool,
-    pub alt_tab_block_active: bool,
-    pub alt_tab_error: Option<String>,
     pub server_error: Option<String>,
     pub pending_note_duration: Option<u64>,
     pub pending_power_action: Option<PendingPowerAction>,
@@ -130,18 +126,6 @@ impl AppState {
         let history = load_with_warning(storage.load_history(), "history", &mut warnings);
         let notes = load_with_warning(storage.load_notes(), "notes", &mut warnings);
 
-        if let Some(legacy) = read_legacy_blocking() {
-            if legacy && !settings.sites_blocked {
-                settings.sites_blocked = legacy;
-                if let Err(error) = storage.save_settings(&settings) {
-                    eprintln!("Could not migrate legacy blocking.json: {error}");
-                }
-            }
-            let path = std::path::Path::new("data").join("blocking.json");
-            if let Err(error) = std::fs::remove_file(&path) {
-                eprintln!("Could not remove legacy {}: {error}", path.display());
-            }
-        }
 
         if settings.pin.is_empty() {
             settings.pin = generate_pin()?;
@@ -152,25 +136,6 @@ impl AppState {
 
         let timer = Timer::new(&settings);
 
-        let (alt_tab_block_active, alt_tab_error) = if settings.block_alt_tab {
-            match alt_tab::set_blocked(true) {
-                Ok(()) => (true, None),
-                Err(error) => (false, Some(format!("Could not block Alt+Tab: {error}"))),
-            }
-        } else {
-            (false, None)
-        };
-
-        let hosts_block_active = match site_blocker::set_blocked(settings.sites_blocked) {
-            Ok(()) => settings.sites_blocked,
-            Err(error) => {
-                warnings.push(format!(
-                    "Could not synchronize the Windows hosts block: {error}. \
-                     Run the app as Administrator."
-                ));
-                false
-            }
-        };
 
         let error_message = if warnings.is_empty() {
             None
@@ -180,7 +145,6 @@ impl AppState {
 
         let pin = settings.pin.clone();
         let port = settings.port;
-        let sites_blocked = settings.sites_blocked;
 
         Ok(Self {
             settings,
@@ -191,10 +155,6 @@ impl AppState {
             port,
             port_change_pending: false,
             local_url: String::new(),
-            sites_blocked,
-            hosts_block_active,
-            alt_tab_block_active,
-            alt_tab_error,
             server_error: None,
             pending_note_duration: None,
             pending_power_action: None,
@@ -330,12 +290,7 @@ impl AppState {
         self.tick();
         settings.sanitize();
         // Preserve only the fields that callers (desktop and phone) never
-        // explicitly set in this payload. `escape_exits_fullscreen`,
-        // `start_minimized`, `close_to_tray`, and `remote_import` are user-
-        // controlled from the phone (and, in some cases, the desktop), so
-        // the incoming value wins.
-        settings.block_alt_tab = self.settings.block_alt_tab;
-        settings.sites_blocked = self.settings.sites_blocked;
+        // Preserve fields controlled from the desktop or generated locally.
         settings.pin = self.settings.pin.clone();
         settings.port = self.settings.port;
         self.storage
@@ -343,45 +298,6 @@ impl AppState {
             .map_err(|error| format!("Could not save settings: {error}"))?;
         self.settings = settings;
         self.timer.set_settings(&self.settings);
-        self.ctx.request_repaint();
-        Ok(())
-    }
-
-    pub fn set_alt_tab_blocked(&mut self, blocked: bool) -> Result<(), String> {
-        if self.alt_tab_block_active == blocked && self.settings.block_alt_tab == blocked {
-            return Ok(());
-        }
-        let previous_active = self.alt_tab_block_active;
-        if let Err(error) = alt_tab::set_blocked(blocked) {
-            let message = format!("Could not update Alt+Tab blocking: {error}");
-            self.alt_tab_error = Some(message.clone());
-            self.ctx.request_repaint();
-            return Err(message);
-        }
-
-        let mut settings = self.settings.clone();
-        settings.block_alt_tab = blocked;
-        if let Err(error) = self.storage.save_settings(&settings) {
-            if previous_active != blocked
-                && let Err(rollback_error) = alt_tab::set_blocked(previous_active)
-            {
-                let message = format!(
-                    "Could not save Alt+Tab setting: {error}; restoring the previous \
-                     keyboard state also failed: {rollback_error}"
-                );
-                self.alt_tab_error = Some(message.clone());
-                self.ctx.request_repaint();
-                return Err(message);
-            }
-            let message = format!("Could not save Alt+Tab setting: {error}");
-            self.alt_tab_error = Some(message.clone());
-            self.ctx.request_repaint();
-            return Err(message);
-        }
-
-        self.settings = settings;
-        self.alt_tab_block_active = blocked;
-        self.alt_tab_error = None;
         self.ctx.request_repaint();
         Ok(())
     }
@@ -481,60 +397,6 @@ impl AppState {
             return Err(format!("Could not restore study note: {error}"));
         }
         self.notes.entries.push(note);
-        self.ctx.request_repaint();
-        Ok(())
-    }
-
-    pub fn set_sites_blocked(&mut self, blocked: bool) -> Result<(), String> {
-        if self.sites_blocked == blocked {
-            return Ok(());
-        }
-        let old_hosts_state = self.hosts_block_active;
-
-        let hosts_block_active = match site_blocker::set_blocked(blocked) {
-            Ok(()) => blocked,
-            Err(error) if blocked => {
-                self.error_message = Some(format!(
-                    "Browser extension blocking is enabled, but system-wide blocking \
-                     failed: {error}. Run Pomodoro Focus as Administrator."
-                ));
-                false
-            }
-            Err(error) => {
-                return Err(format!(
-                    "Could not disable system-wide blocking: {error}. \
-                     Run Pomodoro Focus as Administrator."
-                ));
-            }
-        };
-
-        let mut settings = self.settings.clone();
-        settings.sites_blocked = blocked;
-        if let Err(error) = self.storage.save_settings(&settings) {
-            if hosts_block_active != old_hosts_state
-                && let Err(rollback_error) = site_blocker::set_blocked(old_hosts_state)
-            {
-                return Err(format!(
-                    "Could not save blocking settings: {error}; \
-                     reverting the hosts file also failed: {rollback_error}"
-                ));
-            }
-            return Err(format!("Could not save blocking settings: {error}"));
-        }
-
-        self.settings = settings;
-        self.sites_blocked = blocked;
-        self.hosts_block_active = hosts_block_active;
-
-        if blocked && !hosts_block_active {
-            self.error_message.get_or_insert_with(|| {
-                "Browser extension blocking is enabled, but system-wide blocking \
-                 needs Administrator access."
-                    .to_owned()
-            });
-        } else {
-            self.error_message = None;
-        }
         self.ctx.request_repaint();
         Ok(())
     }
@@ -694,18 +556,6 @@ where
     })
 }
 
-fn read_legacy_blocking() -> Option<bool> {
-    #[derive(Deserialize)]
-    struct Legacy {
-        #[serde(default)]
-        sites_blocked: bool,
-    }
-    let path = std::path::Path::new("data").join("blocking.json");
-    let bytes = std::fs::read(&path).ok()?;
-    serde_json::from_slice::<Legacy>(&bytes)
-        .ok()
-        .map(|legacy| legacy.sites_blocked)
-}
 
 pub fn generate_pin() -> Result<String, getrandom::Error> {
     let mut bytes = [0u8; 4];
@@ -732,8 +582,6 @@ pub fn build_router(state: SharedState) -> Router {
         .route("/status", get(status))
         .route("/command", post(command))
         .route("/settings", post(update_settings))
-        .route("/blocking", post(update_blocking))
-        .route("/alt-tab", post(update_alt_tab))
         .route("/notes", post(add_note))
         .route("/notes/update", post(update_note))
         .route("/notes/delete", post(delete_note))
@@ -894,11 +742,6 @@ struct StatusResponse {
     short_break_minutes: u32,
     long_break_minutes: u32,
     sessions_before_long_break: u32,
-    escape_exits_fullscreen: bool,
-    sites_blocked: bool,
-    hosts_block_active: bool,
-    alt_tab_blocked: bool,
-    alt_tab_error: Option<String>,
     current_streak: u32,
     completed_sessions: u32,
     notes: Vec<NoteSummary>,
@@ -959,11 +802,6 @@ async fn status(State(shared): State<SharedState>) -> Result<Json<StatusResponse
         short_break_minutes: state.settings.short_break_minutes,
         long_break_minutes: state.settings.long_break_minutes,
         sessions_before_long_break: state.settings.sessions_before_long_break,
-        escape_exits_fullscreen: state.settings.escape_exits_fullscreen,
-        sites_blocked: state.sites_blocked,
-        hosts_block_active: state.hosts_block_active,
-        alt_tab_blocked: state.alt_tab_block_active,
-        alt_tab_error: state.alt_tab_error.clone(),
         current_streak: state.history.current_streak(),
         completed_sessions: state.timer.completed_study_sessions,
         notes,
@@ -1238,7 +1076,6 @@ struct SettingsRequest {
     short_break_minutes: u32,
     long_break_minutes: u32,
     sessions_before_long_break: u32,
-    escape_exits_fullscreen: bool,
     #[serde(default)]
     auto_start_next: bool,
     #[serde(default)]
@@ -1267,9 +1104,6 @@ async fn update_settings(
         short_break_minutes: request.short_break_minutes,
         long_break_minutes: request.long_break_minutes,
         sessions_before_long_break: request.sessions_before_long_break,
-        escape_exits_fullscreen: request.escape_exits_fullscreen,
-        block_alt_tab: state.settings.block_alt_tab,
-        sites_blocked: state.settings.sites_blocked,
         pin: state.settings.pin.clone(),
         port: state.settings.port,
         auto_start_next: request.auto_start_next,
@@ -1288,55 +1122,6 @@ async fn update_settings(
     }))
 }
 
-#[derive(Deserialize)]
-struct AltTabRequest {
-    token: String,
-    blocked: bool,
-}
-
-async fn update_alt_tab(
-    State(shared): State<SharedState>,
-    ConnectInfo(addr): ConnectInfo<SocketAddr>,
-    Json(request): Json<AltTabRequest>,
-) -> Result<Json<MessageResponse>, ApiError> {
-    let mut state = shared
-        .lock()
-        .map_err(|_| ApiError::internal("App state is unavailable"))?;
-    verify_token(&mut state, addr.ip(), &request.token)?;
-    state
-        .set_alt_tab_blocked(request.blocked)
-        .map_err(ApiError::internal)?;
-    Ok(Json(MessageResponse {
-        ok: true,
-        warning: None,
-    }))
-}
-
-#[derive(Deserialize)]
-struct BlockingRequest {
-    token: String,
-    blocked: bool,
-}
-
-async fn update_blocking(
-    State(shared): State<SharedState>,
-    ConnectInfo(addr): ConnectInfo<SocketAddr>,
-    Json(request): Json<BlockingRequest>,
-) -> Result<Json<MessageResponse>, ApiError> {
-    let mut state = shared
-        .lock()
-        .map_err(|_| ApiError::internal("App state is unavailable"))?;
-    verify_token(&mut state, addr.ip(), &request.token)?;
-    state
-        .set_sites_blocked(request.blocked)
-        .map_err(ApiError::internal)?;
-    let warning = if request.blocked && !state.hosts_block_active {
-        state.error_message.clone()
-    } else {
-        None
-    };
-    Ok(Json(MessageResponse { ok: true, warning }))
-}
 
 #[derive(Deserialize)]
 struct NoteRequest {

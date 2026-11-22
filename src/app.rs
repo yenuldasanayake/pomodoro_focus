@@ -1,5 +1,5 @@
 use crate::{
-    alt_tab, breaks, charts, export, import, site_blocker, tray,
+    breaks, charts, export, import, tray,
     server::{self, AppState, PowerAction, SharedState},
     storage::Storage,
     theme,
@@ -150,15 +150,6 @@ impl eframe::App for PomodoroApp {
             ctx.send_viewport_cmd(egui::ViewportCommand::Title(title));
         }
 
-        // Escape toggles fullscreen. We track the state in a local bool so
-        // repeated toggles are deterministic even if the OS viewport reports
-        // stale fullscreen information mid-transition.
-        if state.settings.escape_exits_fullscreen
-            && ctx.input(|input| input.key_pressed(Key::Escape))
-        {
-            self.app_is_fullscreen = !self.app_is_fullscreen;
-            ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(self.app_is_fullscreen));
-        }
         // Resync our local flag from the OS when it reports a definitive value.
         if let Some(v) = ctx.input(|input| input.viewport().fullscreen) {
             self.app_is_fullscreen = v;
@@ -268,8 +259,6 @@ impl eframe::App for PomodoroApp {
     fn on_exit(&mut self) {
         if let Ok(mut state) = self.shared.lock() {
             state.flush_all();
-            let _ = alt_tab::set_blocked(false);
-            let _ = site_blocker::set_blocked(false);
         }
     }
 }
@@ -522,17 +511,6 @@ impl PomodoroApp {
                     .size(12.0)
                     .color(theme::MUTED),
                 );
-                ui.label(
-                    egui::RichText::new(if state.hosts_block_active {
-                        "System-wide site block is active. The browser extension follows this switch."
-                    } else if state.sites_blocked {
-                        "Browser extension blocking is on; run this app as Administrator to block across Windows."
-                    } else {
-                        "Manage website blocking from the phone page."
-                    })
-                    .size(12.0)
-                    .color(theme::MUTED),
-                );
             });
     }
 
@@ -592,11 +570,8 @@ impl PomodoroApp {
             changed = true;
         }
         if changed {
-            settings.block_alt_tab = state.settings.block_alt_tab;
-            settings.sites_blocked = state.settings.sites_blocked;
             settings.pin = state.settings.pin.clone();
             settings.port = state.settings.port;
-            settings.escape_exits_fullscreen = state.settings.escape_exits_fullscreen;
             settings.start_minimized = state.settings.start_minimized;
             settings.close_to_tray = state.settings.close_to_tray;
             settings.remote_import = state.settings.remote_import;

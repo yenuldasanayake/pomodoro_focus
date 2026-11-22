@@ -185,12 +185,6 @@ body.flash::before{content:"";position:fixed;inset:0;background:var(--accent);op
   </section>
 
   <section class="card">
-    <div class="eyebrow">Stay focused</div>
-    <p id="block-description" class="today" style="margin-top:6px">Block Instagram, YouTube, TikTok, and Facebook.</p>
-    <button id="block-toggle" class="button primary wide" style="margin-top:14px" onclick="toggleBlocking()">Block distracting sites</button>
-  </section>
-
-  <section class="card">
     <div class="eyebrow">Remote access</div>
     <label for="pin">PIN shown on your PC</label>
     <div class="token">
@@ -213,15 +207,9 @@ body.flash::before{content:"";position:fixed;inset:0;background:var(--accent);op
     <label class="check-row"><input id="remote-import" type="checkbox"><span>Allow remote data import</span></label>
     <label class="check-row"><input id="start-minimized" type="checkbox"><span>Start minimized to tray</span></label>
     <label class="check-row"><input id="close-to-tray" type="checkbox"><span>Always minimize to tray on close</span></label>
-    <label class="check-row"><input id="escape-enabled" type="checkbox"><span>Allow Esc to toggle fullscreen</span></label>
     <button class="button primary wide" style="margin-top:14px" onclick="saveSettings()">Save settings</button>
   </section>
 
-  <section class="card">
-    <div class="eyebrow">Stay on task</div>
-    <p id="alt-tab-description" class="today" style="margin-top:6px">Block Alt+Tab, Win+Tab, and taskbar app switching while Pomodoro Focus is running.</p>
-    <button id="alt-tab-toggle" class="button primary wide" style="margin-top:14px" onclick="toggleAltTab()">Disable app switching</button>
-  </section>
 
   <details class="card" id="power-card" style="display:none">
     <summary class="eyebrow" style="cursor:pointer;list-style:none">Power · tap to open</summary>
@@ -309,22 +297,6 @@ async function sendCommand(command){
   try{await post("/command",{command});toast("Command sent")}
   catch(e){toast(e.message,"error")}
 }
-async function toggleBlocking(){
-  const btn=$("block-toggle");
-  const blocked=btn.dataset.blocked!=="true";
-  try{
-    const r=await post("/blocking",{blocked});
-    toast(r.warning||(blocked?"Distracting sites blocked":"Sites unblocked"),r.warning?"warn":"");
-  }catch(e){toast(e.message,"error")}
-}
-async function toggleAltTab(){
-  const btn=$("alt-tab-toggle");
-  const blocked=btn.dataset.blocked!=="true";
-  try{
-    await post("/alt-tab",{blocked});
-    toast(blocked?"App switching disabled while running":"App switching enabled");
-  }catch(e){toast(e.message,"error")}
-}
 async function saveSettings(){
   try{
     await post("/settings",{
@@ -332,7 +304,6 @@ async function saveSettings(){
       short_break_minutes:+$("short").value,
       long_break_minutes:+$("long").value,
       sessions_before_long_break:+$("sessions").value,
-      escape_exits_fullscreen:$("escape-enabled").checked,
       auto_start_next:$("auto-start").checked,
       daily_goal_minutes:+$("goal").value,
       remote_power_control:$("power-control").checked,
@@ -707,20 +678,6 @@ async function refresh(){
     $("stat-streak").textContent=(s.current_streak||0)+"d";
     $("stat-sessions").textContent=String(s.completed_sessions||0);
 
-    const b=$("block-toggle");
-    b.dataset.blocked=String(s.sites_blocked);
-    b.textContent=s.sites_blocked?"Unblock distracting sites":"Block distracting sites";
-    $("block-description").textContent=
-      s.hosts_block_active?"Blocking is active across Windows and in the browser extension.":
-      s.sites_blocked?"Browser extension blocking is on. Run the desktop app as Administrator for system-wide blocking.":
-      "Block Instagram, YouTube, TikTok, and Facebook across Windows and supported browsers.";
-
-    const a=$("alt-tab-toggle");
-    a.dataset.blocked=String(s.alt_tab_blocked);
-    a.textContent=s.alt_tab_blocked?"Enable app switching":"Disable app switching";
-    $("alt-tab-description").textContent=s.alt_tab_error||
-      "Block Alt+Tab, Win+Tab, and taskbar app switching while Pomodoro Focus is running.";
-
     if(!loaded){
       $("study").value=s.study_minutes;
       $("short").value=s.short_break_minutes;
@@ -728,7 +685,6 @@ async function refresh(){
       $("sessions").value=s.sessions_before_long_break;
       $("goal").value=s.daily_goal_minutes;
       $("auto-start").checked=s.auto_start_next;
-      $("escape-enabled").checked=s.escape_exits_fullscreen;
       $("power-control").checked=s.power_control_available;
       $("remote-import").checked=s.remote_import;
       $("start-minimized").checked=s.start_minimized;

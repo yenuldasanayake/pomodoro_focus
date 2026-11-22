@@ -1,4 +1,3 @@
-pub mod alt_tab;
 pub mod app;
 pub mod audio;
 pub mod breaks;
@@ -6,7 +5,6 @@ pub mod charts;
 pub mod export;
 pub mod import;
 pub mod server;
-pub mod site_blocker;
 pub mod storage;
 pub mod system;
 pub mod theme;
