@@ -389,6 +389,26 @@ impl AppState {
         Ok(())
     }
 
+    pub fn save_daily_plan(&mut self, day: String, plan: String) -> Result<(), String> {
+        let previous_history = self.history.clone();
+        let was_dirty = self.history_dirty;
+        self.history.set_plan_for(day, plan);
+        self.history_dirty = true;
+        match self.storage.save_history(&self.history) {
+            Ok(()) => {
+                self.history_dirty = false;
+                self.last_history_flush = Instant::now();
+                self.ctx.request_repaint();
+                Ok(())
+            }
+            Err(error) => {
+                self.history = previous_history;
+                self.history_dirty = was_dirty;
+                Err(format!("Could not save tomorrow’s plan: {error}"))
+            }
+        }
+    }
+
     pub fn set_active_task(&mut self, task: String) -> Result<(), String> {
         let mut settings = self.settings.clone();
         settings.active_task = task.trim().to_owned();
@@ -848,7 +868,12 @@ struct StatusResponse {
     long_break_minutes: u32,
     sessions_before_long_break: u32,
     current_streak: u32,
+    weekly_streak_weeks: u32,
+    weekly_focus_days: u32,
+    weekly_goal_days: u32,
     completed_sessions: u32,
+    today_sessions: u32,
+    has_untracked_session_days: bool,
     notes: Vec<NoteSummary>,
     auto_start_next: bool,
     daily_goal_minutes: u32,
@@ -902,7 +927,12 @@ async fn status(State(shared): State<SharedState>) -> Result<Json<StatusResponse
         long_break_minutes: state.settings.long_break_minutes,
         sessions_before_long_break: state.settings.sessions_before_long_break,
         current_streak: state.history.current_streak(),
+        weekly_streak_weeks: state.history.weekly_streak(state.settings.weekly_goal_days),
+        weekly_focus_days: state.history.weekly_focus_days(),
+        weekly_goal_days: state.settings.weekly_goal_days,
         completed_sessions: state.timer.completed_study_sessions,
+        today_sessions: state.history.today_sessions(),
+        has_untracked_session_days: state.history.has_untracked_session_days(),
         notes,
         auto_start_next: state.settings.auto_start_next,
         daily_goal_minutes: goal_minutes,
@@ -1166,6 +1196,8 @@ struct SettingsRequest {
     #[serde(default)]
     daily_goal_minutes: u32,
     #[serde(default)]
+    weekly_goal_days: Option<u32>,
+    #[serde(default)]
     remote_power_control: bool,
     #[serde(default)]
     remote_import: bool,
@@ -1199,6 +1231,7 @@ async fn update_settings(
         port: state.settings.port,
         auto_start_next: request.auto_start_next,
         daily_goal_minutes: request.daily_goal_minutes,
+        weekly_goal_days: request.weekly_goal_days.unwrap_or(state.settings.weekly_goal_days),
         remote_power_control: request.remote_power_control,
         remote_import: request.remote_import,
         start_minimized: request.start_minimized,
@@ -1207,6 +1240,9 @@ async fn update_settings(
         desktop_notifications: request.desktop_notifications,
         completion_sound: request.completion_sound,
         launch_at_startup: request.launch_at_startup,
+        compact_timer: state.settings.compact_timer,
+        always_on_top: state.settings.always_on_top,
+        onboarding_complete: state.settings.onboarding_complete,
     };
     state.update_settings(settings).map_err(ApiError::internal)?;
     Ok(Json(MessageResponse { ok: true, warning: None }))

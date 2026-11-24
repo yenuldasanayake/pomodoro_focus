@@ -7,6 +7,7 @@
   "port": 56987,
   "auto_start_next": false,
   "daily_goal_minutes": 0,
+  "weekly_goal_days": 5,
   "remote_power_control": true,
   "remote_import": false,
   "start_minimized": true,
@@ -14,5 +15,8 @@
   "active_task": "",
   "desktop_notifications": false,
   "completion_sound": false,
-  "launch_at_startup": false
+  "launch_at_startup": false,
+  "compact_timer": false,
+  "always_on_top": false,
+  "onboarding_complete": true
 }

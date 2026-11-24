@@ -4,7 +4,7 @@ use eframe::egui::{self, Color32};
 use egui_plot::{Bar, BarChart, Plot};
 use std::collections::BTreeMap;
 
-pub fn show(ui: &mut egui::Ui, history: &History, notes: &Notes) {
+pub fn show(ui: &mut egui::Ui, history: &History, notes: &Notes, weekly_goal_days: u32) {
     ui.add_space(14.0);
     ui.horizontal(|ui| {
         ui.label(
@@ -30,8 +30,13 @@ pub fn show(ui: &mut egui::Ui, history: &History, notes: &Notes) {
     ui.horizontal(|ui| {
         ui.heading("Your rhythm");
         ui.label(
-            egui::RichText::new(format!("🔥 {} day streak", history.current_streak()))
-                .color(Color32::from_rgb(250, 179, 135)),
+            egui::RichText::new(format!(
+                "{}-week rhythm · this week {}/{} days",
+                history.weekly_streak(weekly_goal_days),
+                history.weekly_focus_days(),
+                weekly_goal_days
+            ))
+            .color(Color32::from_rgb(250, 179, 135)),
         );
         if let Some((day, seconds)) = history.best_day() {
             ui.label(

@@ -3,6 +3,7 @@
 
 use crate::storage::{History, Notes, WeeklyReflections};
 use serde::Serialize;
+use std::collections::BTreeSet;
 
 /// Version stamp written into `all.json` so future restores can tell which
 /// format they're looking at.
@@ -30,15 +31,27 @@ pub fn all_json(history: &History, notes: &Notes, reflections: &WeeklyReflection
 }
 
 /// CSV of `daily_seconds`, oldest date first.
-/// Columns: date,seconds,minutes
+/// Columns: date,seconds,minutes,sessions,plan
 pub fn history_csv(history: &History) -> String {
-    let mut out = String::from("date,seconds,minutes\n");
-    for (date, seconds) in &history.daily_seconds {
-        out.push_str(date);
+    let mut out = String::from("date,seconds,minutes,sessions,plan\n");
+    let days: BTreeSet<String> = history
+        .daily_seconds
+        .keys()
+        .chain(history.daily_sessions.keys())
+        .chain(history.daily_plans.keys())
+        .cloned()
+        .collect();
+    for date in days {
+        let seconds = history.daily_seconds.get(&date).copied().unwrap_or_default();
+        out.push_str(&date);
         out.push(',');
         out.push_str(&seconds.to_string());
         out.push(',');
-        out.push_str(&format!("{:.2}", *seconds as f64 / 60.0));
+        out.push_str(&format!("{:.2}", seconds as f64 / 60.0));
+        out.push(',');
+        out.push_str(&history.daily_sessions.get(&date).copied().unwrap_or_default().to_string());
+        out.push(',');
+        out.push_str(&csv_field(history.plan_for(&date).unwrap_or("")));
         out.push('\n');
     }
     out
@@ -66,16 +79,19 @@ pub fn notes_csv(notes: &Notes) -> String {
 }
 
 /// Combined CSV: one row per note, with the day's total attached.
-/// Columns: date,today_seconds,id,timestamp,duration_seconds,subject,accomplishment
+/// Columns: date,today_seconds,today_sessions,id,timestamp,duration_seconds,subject,accomplishment
 pub fn all_csv(history: &History, notes: &Notes) -> String {
-    let mut out =
-        String::from("date,today_seconds,id,timestamp,duration_seconds,subject,accomplishment\n");
+    let mut out = String::from(
+        "date,today_seconds,today_sessions,id,timestamp,duration_seconds,subject,accomplishment\n",
+    );
     for note in &notes.entries {
         let day = note.timestamp.get(..10).unwrap_or("").to_owned();
         let day_total = history.daily_seconds.get(&day).copied().unwrap_or_default();
         out.push_str(&csv_field(&day));
         out.push(',');
         out.push_str(&day_total.to_string());
+        out.push(',');
+        out.push_str(&history.daily_sessions.get(&day).copied().unwrap_or_default().to_string());
         out.push(',');
         out.push_str(&csv_field(&note.id));
         out.push(',');
@@ -163,9 +179,17 @@ mod tests {
     #[test]
     fn history_csv_has_header_and_rows() {
         let csv = history_csv(&sample_history());
-        assert!(csv.starts_with("date,seconds,minutes\n"));
-        assert!(csv.contains("2026-10-01,1500,25.00"));
+        assert!(csv.starts_with("date,seconds,minutes,sessions,plan\n"));
+        assert!(csv.contains("2026-10-01,1500,25.00,0"));
         assert!(csv.contains("2026-10-02,900,15.00"));
+    }
+
+    #[test]
+    fn history_csv_includes_plan_days_without_study_time() {
+        let mut history = History::default();
+        history.set_plan_for("2026-10-03".to_owned(), "Read chapter 2".to_owned());
+
+        assert!(history_csv(&history).contains("2026-10-03,0,0.00,0,Read chapter 2"));
     }
 
     #[test]

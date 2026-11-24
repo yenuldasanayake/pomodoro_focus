@@ -165,6 +165,9 @@ fn apply_merge(
             .and_modify(|existing| *existing = (*existing).max(sessions))
             .or_insert(sessions);
     }
+    for (day, plan) in bundle.history.daily_plans {
+        history.daily_plans.entry(day).or_insert(plan);
+    }
 
     let mut existing_ids: std::collections::HashSet<String> =
         notes.entries.iter().map(|note| note.id.clone()).collect();
@@ -280,6 +283,21 @@ mod tests {
 
         assert_eq!(history.daily_sessions["2026-10-01"], 5);
         assert_eq!(history.daily_sessions["2026-10-02"], 2);
+    }
+
+    #[test]
+    fn merge_keeps_existing_daily_plans_and_adds_missing_days() {
+        let mut history = History::default();
+        history.daily_plans.insert("2026-10-01".to_owned(), "Existing plan".to_owned());
+        let mut imported = bundle(&[], vec![]);
+        imported.history.daily_plans.insert("2026-10-01".to_owned(), "Imported plan".to_owned());
+        imported.history.daily_plans.insert("2026-10-02".to_owned(), "New plan".to_owned());
+        let mut notes = Notes::default();
+
+        apply(imported, &mut history, &mut notes, Mode::Merge);
+
+        assert_eq!(history.plan_for("2026-10-01"), Some("Existing plan"));
+        assert_eq!(history.plan_for("2026-10-02"), Some("New plan"));
     }
 
     #[test]

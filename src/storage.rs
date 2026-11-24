@@ -17,6 +17,8 @@ pub struct Settings {
     pub port: u16,
     pub auto_start_next: bool,
     pub daily_goal_minutes: u32,
+    #[serde(default = "default_weekly_goal_days")]
+    pub weekly_goal_days: u32,
     pub remote_power_control: bool,
     pub remote_import: bool,
     pub start_minimized: bool,
@@ -29,6 +31,20 @@ pub struct Settings {
     pub completion_sound: bool,
     #[serde(default)]
     pub launch_at_startup: bool,
+    #[serde(default)]
+    pub compact_timer: bool,
+    #[serde(default)]
+    pub always_on_top: bool,
+    #[serde(default = "legacy_setup_complete")]
+    pub onboarding_complete: bool,
+}
+
+fn default_weekly_goal_days() -> u32 {
+    5
+}
+
+fn legacy_setup_complete() -> bool {
+    true
 }
 
 impl Default for Settings {
@@ -42,6 +58,7 @@ impl Default for Settings {
             port: 0,
             auto_start_next: false,
             daily_goal_minutes: 0,
+            weekly_goal_days: default_weekly_goal_days(),
             remote_power_control: false,
             remote_import: false,
             start_minimized: false,
@@ -50,6 +67,9 @@ impl Default for Settings {
             desktop_notifications: true,
             completion_sound: true,
             launch_at_startup: false,
+            compact_timer: false,
+            always_on_top: false,
+            onboarding_complete: false,
         }
     }
 }
@@ -71,6 +91,7 @@ impl Settings {
         if self.daily_goal_minutes > 0 {
             self.daily_goal_minutes = self.daily_goal_minutes.clamp(15, 720);
         }
+        self.weekly_goal_days = self.weekly_goal_days.clamp(1, 7);
     }
 }
 
@@ -89,10 +110,13 @@ mod settings_tests {
         assert_eq!(settings.port, 0);
         assert!(!settings.auto_start_next);
         assert_eq!(settings.daily_goal_minutes, 0);
+        assert_eq!(settings.weekly_goal_days, 5);
         assert!(!settings.remote_power_control);
         assert!(!settings.remote_import);
         assert!(!settings.start_minimized);
         assert!(!settings.close_to_tray);
+        assert!(!settings.compact_timer);
+        assert!(!settings.always_on_top);
     }
 
     #[test]
@@ -167,6 +191,27 @@ mod settings_tests {
         let settings: Settings = serde_json::from_str(r#"{}"#).unwrap();
         assert!(!settings.launch_at_startup);
     }
+
+    #[test]
+    fn weekly_goal_defaults_to_five_and_is_clamped() {
+        let settings: Settings = serde_json::from_str(r#"{}"#).unwrap();
+        assert_eq!(settings.weekly_goal_days, 5);
+
+        let mut settings = Settings { weekly_goal_days: 0, ..Settings::default() };
+        settings.sanitize();
+        assert_eq!(settings.weekly_goal_days, 1);
+
+        settings.weekly_goal_days = 8;
+        settings.sanitize();
+        assert_eq!(settings.weekly_goal_days, 7);
+    }
+
+    #[test]
+    fn existing_settings_skip_first_run_setup() {
+        let settings: Settings = serde_json::from_str(r#"{"study_minutes":25}"#).unwrap();
+        assert!(settings.onboarding_complete);
+        assert!(!Settings::default().onboarding_complete);
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -176,6 +221,8 @@ pub struct History {
     pub daily_seconds: BTreeMap<String, u64>,
     #[serde(default)]
     pub daily_sessions: BTreeMap<String, u32>,
+    #[serde(default)]
+    pub daily_plans: BTreeMap<String, String>,
 }
 
 impl Default for History {
@@ -184,6 +231,7 @@ impl Default for History {
             version: Self::CURRENT_VERSION,
             daily_seconds: BTreeMap::new(),
             daily_sessions: BTreeMap::new(),
+            daily_plans: BTreeMap::new(),
         }
     }
 }
@@ -207,6 +255,33 @@ impl History {
 
     pub fn today_sessions(&self) -> u32 {
         self.daily_sessions.get(&Local::now().date_naive().to_string()).copied().unwrap_or_default()
+    }
+
+    pub fn plan_for(&self, day: &str) -> Option<&str> {
+        self.daily_plans.get(day).map(String::as_str)
+    }
+
+    pub fn set_plan_for(&mut self, day: String, plan: String) {
+        let plan = plan.trim();
+        if plan.is_empty() {
+            self.daily_plans.remove(&day);
+        } else {
+            self.daily_plans.insert(day, plan.to_owned());
+        }
+    }
+
+    pub fn session_counts_started_on(&self) -> Option<&str> {
+        self.daily_sessions.keys().next().map(String::as_str)
+    }
+
+    pub fn has_untracked_session_days(&self) -> bool {
+        match (self.daily_seconds.keys().next(), self.session_counts_started_on()) {
+            (Some(first_study_day), Some(first_counted_day)) => {
+                first_study_day.as_str() < first_counted_day
+            }
+            (Some(_), None) => true,
+            _ => false,
+        }
     }
 
     pub fn current_week_seconds(&self) -> u64 {
@@ -252,6 +327,44 @@ impl History {
             day = previous;
         }
         streak
+    }
+
+    pub fn weekly_focus_days(&self) -> u32 {
+        let today = Local::now().date_naive();
+        let week_start = today - Duration::days(i64::from(today.weekday().num_days_from_monday()));
+        self.focus_days_between(week_start, today)
+    }
+
+    pub fn weekly_streak(&self, weekly_goal_days: u32) -> u32 {
+        let today = Local::now().date_naive();
+        let target = weekly_goal_days.clamp(1, 7);
+        let current_week_start =
+            today - Duration::days(i64::from(today.weekday().num_days_from_monday()));
+        let current_week_met = self.focus_days_between(current_week_start, today) >= target;
+        let mut week_start = if current_week_met {
+            current_week_start
+        } else {
+            current_week_start - Duration::days(7)
+        };
+        let mut streak = 0;
+        loop {
+            let week_end = week_start + Duration::days(6);
+            if self.focus_days_between(week_start, week_end) < target {
+                break;
+            }
+            streak += 1;
+            week_start -= Duration::days(7);
+        }
+        streak
+    }
+
+    fn focus_days_between(&self, start: NaiveDate, end: NaiveDate) -> u32 {
+        (0..=end.signed_duration_since(start).num_days())
+            .filter(|offset| {
+                let day = start + Duration::days(*offset);
+                self.daily_seconds.get(&day.to_string()).is_some_and(|seconds| *seconds > 0)
+            })
+            .count() as u32
     }
 
     fn has_study_on(&self, day: NaiveDate) -> bool {
@@ -460,9 +573,104 @@ mod history_tests {
     }
 
     #[test]
+    fn weekly_progress_counts_active_days_and_allows_rest_days() {
+        let today = Local::now().date_naive();
+        let week_start = today - Duration::days(i64::from(today.weekday().num_days_from_monday()));
+        let previous_week = week_start - Duration::days(7);
+        let mut history = History::default();
+        for offset in 0..5 {
+            let day = previous_week + Duration::days(offset);
+            history.daily_seconds.insert(day.to_string(), 60);
+        }
+        history.daily_seconds.insert(week_start.to_string(), 60);
+        if today != week_start {
+            history.daily_seconds.insert(today.to_string(), 60);
+        }
+
+        assert_eq!(history.weekly_focus_days(), if today == week_start { 1 } else { 2 });
+        assert_eq!(history.weekly_streak(5), 1);
+    }
+
+    #[test]
+    fn unfinished_current_week_does_not_break_a_met_weekly_goal() {
+        let today = Local::now().date_naive();
+        let current_week =
+            today - Duration::days(i64::from(today.weekday().num_days_from_monday()));
+        let previous_week = current_week - Duration::days(7);
+        let mut history = History::default();
+        for offset in 0..5 {
+            let day = previous_week + Duration::days(offset);
+            history.daily_seconds.insert(day.to_string(), 60);
+        }
+
+        assert_eq!(history.weekly_streak(5), 1);
+    }
+
+    #[test]
+    fn missed_full_week_ends_the_weekly_streak() {
+        let today = Local::now().date_naive();
+        let current_week =
+            today - Duration::days(i64::from(today.weekday().num_days_from_monday()));
+        let two_weeks_ago = current_week - Duration::days(14);
+        let previous_week = current_week - Duration::days(7);
+        let mut history = History::default();
+        for offset in 0..5 {
+            history.daily_seconds.insert((two_weeks_ago + Duration::days(offset)).to_string(), 60);
+        }
+        for offset in 0..4 {
+            history.daily_seconds.insert((previous_week + Duration::days(offset)).to_string(), 60);
+        }
+
+        assert_eq!(history.weekly_streak(5), 0);
+    }
+
+    #[test]
+    fn current_week_can_extend_the_weekly_streak_once_goal_is_met() {
+        let today = Local::now().date_naive();
+        let current_week =
+            today - Duration::days(i64::from(today.weekday().num_days_from_monday()));
+        let previous_week = current_week - Duration::days(7);
+        let mut history = History::default();
+        history.daily_seconds.insert(today.to_string(), 60);
+        history.daily_seconds.insert(previous_week.to_string(), 60);
+
+        assert_eq!(history.weekly_streak(1), 2);
+    }
+
+    #[test]
+    fn daily_plans_are_trimmed_and_empty_plans_are_removed() {
+        let mut history = History::default();
+        history.set_plan_for("2026-11-23".to_owned(), "  Start chapter 3  ".to_owned());
+        assert_eq!(history.plan_for("2026-11-23"), Some("Start chapter 3"));
+
+        history.set_plan_for("2026-11-23".to_owned(), "  ".to_owned());
+        assert_eq!(history.plan_for("2026-11-23"), None);
+    }
+
+    #[test]
+    fn daily_plans_round_trip_in_history_json() {
+        let mut history = History::default();
+        history.set_plan_for("2026-11-23".to_owned(), "Start chapter 3".to_owned());
+
+        let json = serde_json::to_string(&history).unwrap();
+        let restored: History = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(restored.plan_for("2026-11-23"), Some("Start chapter 3"));
+    }
+
+    #[test]
+    fn old_study_days_are_marked_as_missing_session_counts() {
+        let mut history = History::default();
+        history.daily_seconds.insert("2026-01-01".to_owned(), 3600);
+        history.daily_sessions.insert("2026-01-02".to_owned(), 1);
+        assert!(history.has_untracked_session_days());
+    }
+
+    #[test]
     fn older_history_without_session_counts_still_loads() {
         let history: History = serde_json::from_str(r#"{"version":1,"daily_seconds":{}}"#).unwrap();
         assert!(history.daily_sessions.is_empty());
+        assert!(history.daily_plans.is_empty());
     }
 }
 

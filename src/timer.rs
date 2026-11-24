@@ -115,6 +115,7 @@ impl Timer {
         self.remaining_seconds = self.mode.duration_seconds(settings);
         self.elapsed_in_mode = 0;
         self.last_tick = Instant::now();
+        self.fractional_elapsed = Duration::ZERO;
         self.settings_snapshot = settings.clone();
     }
 
@@ -143,7 +144,9 @@ impl Timer {
 
     pub fn progress(&self, settings: &Settings) -> f32 {
         let total = self.mode.duration_seconds(settings).max(1);
-        (1.0 - self.remaining_seconds as f32 / total as f32).clamp(0.0, 1.0)
+        let remaining =
+            (self.remaining_seconds as f32 - self.fractional_elapsed.as_secs_f32()).max(0.0);
+        (1.0 - remaining / total as f32).clamp(0.0, 1.0)
     }
 
     pub fn set_settings(&mut self, settings: &Settings) {
@@ -282,5 +285,26 @@ mod tests {
         timer.set_settings(&settings_1);
 
         assert_eq!(timer.remaining_seconds, 1);
+    }
+
+    #[test]
+    fn progress_includes_fractional_elapsed_time() {
+        let settings = Settings::default();
+        let mut timer = Timer::new(&settings);
+        timer.remaining_seconds = 1499;
+        timer.fractional_elapsed = Duration::from_millis(500);
+
+        assert!((timer.progress(&settings) - (1.0 - 1498.5 / 1500.0)).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn reset_clears_fractional_progress() {
+        let settings = Settings::default();
+        let mut timer = Timer::new(&settings);
+        timer.fractional_elapsed = Duration::from_millis(500);
+
+        timer.reset(&settings);
+
+        assert_eq!(timer.progress(&settings), 0.0);
     }
 }

@@ -77,6 +77,11 @@ input:focus{outline:none;border-color:var(--accent)}
 .note .icon-btn.danger{color:var(--accent);border-color:color-mix(in srgb,var(--accent) 50%,var(--border))}
 .note-editing{background:var(--panel2)}
 .note-editing .edit-fields{display:flex;flex-direction:column;gap:6px;margin-top:6px}
+summary{cursor:pointer;list-style:none}
+summary::-webkit-details-marker{display:none}
+summary::after{content:"＋";float:right;color:var(--muted)}
+details[open]>summary::after{content:"−"}
+summary:focus-visible,button:focus-visible,a:focus-visible,input:focus-visible{outline:2px solid var(--accent);outline-offset:3px}
 .empty{color:var(--muted);font-size:.85rem;text-align:center;padding:14px 0}
 .note-toast{position:fixed;left:50%;bottom:calc(78px + env(safe-area-inset-bottom));transform:translateX(-50%);background:var(--panel2);border:1px solid var(--border);border-radius:12px;padding:10px 14px;font-size:.82rem;opacity:0;transition:opacity .2s ease;pointer-events:none;z-index:45}
 .note-toast.show{opacity:1}
@@ -132,9 +137,11 @@ body.flash::before{content:"";position:fixed;inset:0;background:var(--accent);op
 
     <div class="stats">
       <div class="stat"><div class="v" id="stat-today">—</div><div class="l">Today</div></div>
-      <div class="stat"><div class="v" id="stat-streak">—</div><div class="l">Streak</div></div>
-      <div class="stat"><div class="v" id="stat-sessions">—</div><div class="l">Sessions</div></div>
+      <div class="stat"><div class="v" id="stat-streak">—</div><div class="l">This week</div></div>
+      <div class="stat"><div class="v" id="stat-sessions">—</div><div class="l">Today’s sessions</div></div>
     </div>
+    <p id="weekly-rhythm" class="today" style="font-size:.72rem"></p>
+    <p id="session-count-note" class="today" style="display:none;font-size:.72rem"></p>
   </section>
 
   <section class="card">
@@ -147,13 +154,13 @@ body.flash::before{content:"";position:fixed;inset:0;background:var(--accent);op
     <button class="button primary wide" style="margin-top:14px" id="note-save-btn" onclick="saveNote()">Save note</button>
   </section>
 
-  <section class="card">
-    <div class="eyebrow">Recent notes</div>
+  <details class="card">
+    <summary class="eyebrow">Recent notes</summary>
     <div class="notes-list" id="notes-list"><div class="empty">No notes yet.</div></div>
-  </section>
+  </details>
 
-  <section class="card">
-    <div class="eyebrow">Export data</div>
+  <details class="card">
+    <summary class="eyebrow">Export data</summary>
     <p class="today" style="margin-top:6px">Download your history, notes, and weekly reflections.</p>
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:14px">
       <a class="button ghost" id="export-history" target="_blank" rel="noopener">History CSV</a>
@@ -161,10 +168,10 @@ body.flash::before{content:"";position:fixed;inset:0;background:var(--accent);op
       <a class="button ghost" id="export-all-csv" target="_blank" rel="noopener">All CSV</a>
       <a class="button primary" id="export-all-json" target="_blank" rel="noopener">All JSON</a>
     </div>
-  </section>
+  </details>
 
-  <section class="card" id="import-card" style="display:none">
-    <div class="eyebrow">Import data</div>
+  <details class="card" id="import-card" style="display:none">
+    <summary class="eyebrow">Import data</summary>
     <p class="today" style="margin-top:6px">
       Restore from a previous <code>all.json</code> export. Merge keeps existing data; replace wipes it.
     </p>
@@ -174,18 +181,18 @@ body.flash::before{content:"";position:fixed;inset:0;background:var(--accent);op
       <button class="button primary" style="flex:1" onclick="applyImport()">Apply merge</button>
     </div>
     <button class="button danger wide" style="margin-top:8px" onclick="applyImportReplace()">Replace (wipes data)</button>
-  </section>
+  </details>
 
-  <section class="card" id="reset-card">
-    <div class="eyebrow" style="color:#f28b82">Danger zone</div>
+  <details class="card" id="reset-card">
+    <summary class="eyebrow" style="color:#f28b82">Danger zone</summary>
     <p class="today" style="margin-top:6px">
       Permanently delete all study history, notes, and weekly reflections. Settings and PIN are not touched.
     </p>
     <button class="button danger wide" style="margin-top:14px" onclick="resetAllData()">Reset all data</button>
-  </section>
+  </details>
 
-  <section class="card">
-    <div class="eyebrow">Remote access</div>
+  <details class="card">
+    <summary class="eyebrow">Remote access & settings</summary>
     <label for="pin">PIN shown on your PC</label>
     <div class="token">
       <input id="pin" inputmode="numeric" maxlength="8" placeholder="8-digit PIN" autocomplete="off">
@@ -201,6 +208,7 @@ body.flash::before{content:"";position:fixed;inset:0;background:var(--accent);op
     </div>
     <div class="grid" style="margin-top:8px">
       <div><label>Daily goal · min (0 = off)</label><input id="goal" type="number" min="0" max="720" inputmode="numeric"></div>
+      <div><label>Weekly focus days</label><input id="weekly-goal-days" type="number" min="1" max="7" inputmode="numeric"></div>
     </div>
     <label for="active-task">Active task</label>
     <input id="active-task" placeholder="What are you working on?">
@@ -213,7 +221,7 @@ body.flash::before{content:"";position:fixed;inset:0;background:var(--accent);op
     <label class="check-row"><input id="start-minimized" type="checkbox"><span>Start minimized to tray</span></label>
     <label class="check-row"><input id="close-to-tray" type="checkbox"><span>Always minimize to tray on close</span></label>
     <button class="button primary wide" style="margin-top:14px" onclick="saveSettings()">Save settings</button>
-  </section>
+  </details>
 
 
   <details class="card" id="power-card" style="display:none">
@@ -311,6 +319,7 @@ async function saveSettings(){
       sessions_before_long_break:+$("sessions").value,
       auto_start_next:$("auto-start").checked,
       daily_goal_minutes:+$("goal").value,
+      weekly_goal_days:+$("weekly-goal-days").value,
       active_task:$("active-task").value.trim(),
       desktop_notifications:$("desktop-notifications").checked,
       completion_sound:$("completion-sound").checked,
@@ -687,8 +696,19 @@ async function refresh(){
     $("toggle").onclick=()=>sendCommand(s.running?"pause":"start");
 
     $("stat-today").textContent=fmtDuration(s.today_total_seconds);
-    $("stat-streak").textContent=(s.current_streak||0)+"d";
-    $("stat-sessions").textContent=String(s.completed_sessions||0);
+    const weeklyDays=s.weekly_focus_days||0;
+    const weeklyGoal=s.weekly_goal_days||5;
+    const weeks=s.weekly_streak_weeks||0;
+    $("stat-streak").textContent=weeklyDays+"/"+weeklyGoal;
+    $("weekly-rhythm").textContent=weeklyDays>=weeklyGoal
+      ?weeks+"-week rhythm · This week’s goal is met; rest is part of the plan."
+      :weeks+"-week rhythm · "+(weeklyGoal-weeklyDays)+" focus day(s) left this week; rest days are okay.";
+    $("stat-sessions").textContent=String(s.today_sessions||0);
+    const sessionNote=$("session-count-note");
+    sessionNote.style.display=s.has_untracked_session_days?"block":"none";
+    sessionNote.textContent=s.has_untracked_session_days
+      ?"Older daily session counts weren’t recorded; tracking from now on."
+      :"";
 
     if(!loaded){
       $("study").value=s.study_minutes;
@@ -696,6 +716,7 @@ async function refresh(){
       $("long").value=s.long_break_minutes;
       $("sessions").value=s.sessions_before_long_break;
       $("goal").value=s.daily_goal_minutes;
+      $("weekly-goal-days").value=s.weekly_goal_days||5;
       $("auto-start").checked=s.auto_start_next;
       $("active-task").value=s.active_task||"";
       $("desktop-notifications").checked=s.desktop_notifications;

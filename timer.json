@@ -1,7 +1,7 @@
 {
   "mode": "study",
-  "remaining_seconds": 1591,
+  "remaining_seconds": 1800,
   "completed_study_sessions": 0,
-  "running": true,
-  "elapsed_in_mode": 209
+  "running": false,
+  "elapsed_in_mode": 0
 }

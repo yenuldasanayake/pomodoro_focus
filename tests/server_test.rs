@@ -53,6 +53,9 @@ async fn status_returns_shape() {
     assert!(json.get("remaining_seconds").is_some());
     assert!(json.get("mode").is_some());
     assert!(json.get("notes").is_some());
+    assert!(json.get("weekly_streak_weeks").is_some());
+    assert!(json.get("weekly_focus_days").is_some());
+    assert!(json.get("weekly_goal_days").is_some());
 
     let _ = std::fs::remove_dir_all(&root);
 }
