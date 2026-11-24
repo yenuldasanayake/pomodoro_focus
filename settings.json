@@ -18,5 +18,6 @@
   "launch_at_startup": false,
   "compact_timer": false,
   "always_on_top": false,
+  "pause_when_minimized": false,
   "onboarding_complete": true
 }

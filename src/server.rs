@@ -75,6 +75,7 @@ pub struct AppState {
     timer_dirty: bool,
     last_timer_flush: Instant,
     last_wall_check: SystemTime,
+    last_monotonic_check: Instant,
 }
 
 #[derive(Default)]
@@ -184,6 +185,7 @@ impl AppState {
             timer_dirty: false,
             last_timer_flush: Instant::now(),
             last_wall_check: SystemTime::now(),
+            last_monotonic_check: Instant::now(),
         })
     }
 
@@ -213,17 +215,18 @@ impl AppState {
             self.current_week_reflection = self.reflections.for_week(&week_start);
         }
 
-        if let Ok(wall_elapsed) = SystemTime::now().duration_since(self.last_wall_check) {
-            if wall_elapsed > Duration::from_secs(5) && self.timer.running {
-                self.timer.running = false;
-                self.timer_dirty = true;
-                self.error_message = Some(
-                    "Timer paused after sleep or system suspension. Press Start when ready."
-                        .to_owned(),
-                );
-            }
-            self.last_wall_check = SystemTime::now();
+        let wall_now = SystemTime::now();
+        let wall_elapsed = wall_now.duration_since(self.last_wall_check).unwrap_or_default();
+        let monotonic_elapsed = now.saturating_duration_since(self.last_monotonic_check);
+        if system_suspended(wall_elapsed, monotonic_elapsed) && self.timer.running {
+            self.timer.running = false;
+            self.timer_dirty = true;
+            self.error_message = Some(
+                "Timer paused after sleep or system suspension. Press Start when ready.".to_owned(),
+            );
         }
+        self.last_wall_check = wall_now;
+        self.last_monotonic_check = now;
 
         if let Some(pending) = &self.pending_power_action {
             if now >= pending.deadline {
@@ -693,6 +696,26 @@ where
         warnings.push(format!("Could not load {name}: {error}"));
         T::default()
     })
+}
+
+fn system_suspended(wall_elapsed: Duration, monotonic_elapsed: Duration) -> bool {
+    wall_elapsed.saturating_sub(monotonic_elapsed) > Duration::from_secs(5)
+}
+
+#[cfg(test)]
+mod timekeeping_tests {
+    use super::system_suspended;
+    use std::time::Duration;
+
+    #[test]
+    fn a_long_ui_pause_is_not_mistaken_for_system_sleep() {
+        assert!(!system_suspended(Duration::from_secs(60), Duration::from_secs(60)));
+    }
+
+    #[test]
+    fn a_system_sleep_is_detected_when_wall_clock_advances_without_monotonic_time() {
+        assert!(system_suspended(Duration::from_secs(60), Duration::ZERO));
+    }
 }
 
 pub fn generate_pin() -> Result<String, getrandom::Error> {
@@ -1242,6 +1265,7 @@ async fn update_settings(
         launch_at_startup: request.launch_at_startup,
         compact_timer: state.settings.compact_timer,
         always_on_top: state.settings.always_on_top,
+        pause_when_minimized: state.settings.pause_when_minimized,
         onboarding_complete: state.settings.onboarding_complete,
     };
     state.update_settings(settings).map_err(ApiError::internal)?;

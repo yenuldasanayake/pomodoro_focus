@@ -14,6 +14,7 @@ use std::{
 };
 
 const CARD_BORDER: Color32 = Color32::from_rgb(52, 56, 64);
+const DASHBOARD_CARD: Color32 = Color32::from_rgb(38, 40, 45);
 const BTN_SECONDARY_FILL: Color32 = Color32::from_rgb(38, 41, 48);
 const BTN_SECONDARY_STROKE: Color32 = Color32::from_rgb(66, 72, 82);
 const RING_TRACK: Color32 = Color32::from_rgb(52, 57, 66);
@@ -278,6 +279,15 @@ impl eframe::App for PomodoroApp {
             }
         }
 
+        let is_minimized = ctx.input(|input| input.viewport().minimized.unwrap_or(false));
+        if is_minimized
+            && state.settings.pause_when_minimized
+            && state.timer.running
+            && let Err(error) = state.execute_command("pause")
+        {
+            state.error_message = Some(error);
+        }
+
         state.tick();
         if state.timer.mode != self.previous_mode {
             if state.timer.mode == Mode::Study && self.previous_mode != Mode::Study {
@@ -303,102 +313,93 @@ impl eframe::App for PomodoroApp {
                 if state.settings.compact_timer {
                     self.show_compact_timer(ui, &mut state, accent);
                 } else {
-                    egui::Frame::new()
-                        .inner_margin(egui::Margin::symmetric(28, 16))
-                        .show(ui, |ui| {
-                            egui::ScrollArea::vertical().auto_shrink([false, false]).show(
-                                ui,
-                                |ui| {
-                                    self.show_top(ui, &mut state);
-                                    ui.add_space(10.0);
-
-                                    // Hero focus zone: Timer + Controls first
-                                    ui.vertical_centered(|ui| {
-                                        self.show_timer(ui, &state, accent);
+                    egui::Frame::new().inner_margin(egui::Margin::symmetric(28, 16)).show(
+                        ui,
+                        |ui| {
+                            let content_width = ui.available_width().min(1080.0);
+                            ui.vertical_centered(|ui| {
+                                ui.set_width(content_width);
+                                egui::ScrollArea::vertical()
+                                    .auto_shrink([false, false])
+                                    .show_viewport(ui, |ui, viewport| {
+                                        self.show_top(ui, &mut state);
                                         ui.add_space(12.0);
-                                        self.show_controls(ui, &mut state, accent);
-                                        ui.add_space(8.0);
-                                        ui.horizontal(|ui| {
-                                            ui.label(
-                                                egui::RichText::new(
-                                                    "Space · start/pause   ·   R · reset   ·   S · skip",
-                                                )
-                                                .size(12.0)
-                                                .color(theme::MUTED),
-                                            );
-                                            if ui.small_button("Keyboard help").clicked() {
-                                                self.show_shortcuts = true;
-                                            }
-                                        });
-                                    });
 
-                                    if state.task_prompt_pending {
-                                        ui.add_space(12.0);
-                                        self.show_task_prompt(ui, &mut state);
-                                    }
+                                        if ui.available_width() >= 760.0 {
+                                            let row_offset = ((viewport.height() - 440.0).max(0.0)
+                                                * 0.45)
+                                                .min(130.0);
+                                            ui.add_space(row_offset);
+                                            let column_gap = 28.0;
+                                            let item_spacing = ui.spacing().item_spacing.x;
+                                            let column_width = ((ui.available_width()
+                                                - column_gap
+                                                - item_spacing * 2.0)
+                                                / 2.0)
+                                                .max(0.0);
+                                            ui.horizontal_top(|ui| {
+                                                ui.allocate_ui_with_layout(
+                                                    Vec2::new(column_width, 0.0),
+                                                    egui::Layout::top_down(egui::Align::Center),
+                                                    |ui| {
+                                                        self.show_timer(ui, &state, accent);
+                                                        ui.add_space(12.0);
+                                                        self.show_controls(ui, &mut state, accent);
+                                                        ui.add_space(8.0);
+                                                        self.show_shortcut_bar(ui);
+                                                    },
+                                                );
 
-                                    ui.add_space(16.0);
-                                    self.show_today_summary(ui, &mut state, accent);
-
-                                    // Bottom stack: Active task + More
-                                    ui.add_space(14.0);
-                                    self.show_quick_focus_bar(ui, &mut state, accent);
-
-                                    ui.add_space(12.0);
-                                    egui::Frame::new()
-                                        .fill(theme::PANEL)
-                                        .stroke(Stroke::new(1.0, CARD_BORDER))
-                                        .corner_radius(14.0)
-                                        .inner_margin(egui::Margin::symmetric(16, 10))
-                                        .show(ui, |ui| {
-                                            ui.set_width(ui.available_width());
-                                            egui::CollapsingHeader::new(
-                                                egui::RichText::new("More")
-                                                    .size(14.0)
-                                                    .strong()
-                                                    .color(theme::TEXT),
-                                            )
-                                            .default_open(false)
-                                            .show(ui, |ui| {
-                                                ui.add_space(6.0);
-                                                egui::CollapsingHeader::new("Phone remote & backups")
-                                                    .default_open(false)
-                                                    .show(ui, |ui| {
-                                                        self.show_connection(ui, &mut state)
-                                                    });
-                                                egui::CollapsingHeader::new("Preferences")
-                                                    .default_open(false)
-                                                    .show(ui, |ui| {
-                                                        self.show_settings(ui, &mut state)
-                                                    });
-                                                egui::CollapsingHeader::new("Weekly reflection")
-                                                    .default_open(false)
-                                                    .show(ui, |ui| {
-                                                        self.show_weekly_reflection(ui, &mut state)
-                                                    });
-                                                egui::CollapsingHeader::new("History & charts")
-                                                    .default_open(false)
-                                                    .show(ui, |ui| {
-                                                        charts::show(
-                                                            ui,
-                                                            &state.history,
-                                                            &state.notes,
-                                                            state.settings.weekly_goal_days,
-                                                        )
-                                                    });
-                                                egui::CollapsingHeader::new(format!(
-                                                    "Notes · {}",
-                                                    state.notes.entries.len()
-                                                ))
-                                                .default_open(false)
-                                                .show(ui, |ui| {
-                                                    self.show_notes_section(ui, &mut state)
-                                                });
+                                                ui.add_space(column_gap);
+                                                ui.allocate_ui_with_layout(
+                                                    Vec2::new(column_width, 0.0),
+                                                    egui::Layout::top_down(egui::Align::LEFT),
+                                                    |ui| {
+                                                        self.show_today_summary(
+                                                            ui, &mut state, accent,
+                                                        );
+                                                        if state.task_prompt_pending {
+                                                            ui.add_space(12.0);
+                                                            self.show_task_prompt(ui, &mut state);
+                                                        }
+                                                        ui.add_space(12.0);
+                                                        self.show_quick_focus_bar(
+                                                            ui, &mut state, accent,
+                                                        );
+                                                        ui.add_space(12.0);
+                                                        self.show_more_section(ui, &mut state);
+                                                    },
+                                                );
                                             });
-                                        });
-                                },
-                            );
-                        });
+                                        } else {
+                                            ui.add_space(
+                                                ((viewport.height() - 600.0).max(0.0) * 0.35)
+                                                    .min(72.0),
+                                            );
+                                            ui.vertical_centered(|ui| {
+                                                self.show_timer(ui, &state, accent);
+                                                ui.add_space(12.0);
+                                                self.show_controls(ui, &mut state, accent);
+                                                ui.add_space(8.0);
+                                                self.show_shortcut_bar(ui);
+                                            });
+
+                                            if state.task_prompt_pending {
+                                                ui.add_space(12.0);
+                                                self.show_task_prompt(ui, &mut state);
+                                            }
+
+                                            ui.add_space(16.0);
+                                            self.show_today_summary(ui, &mut state, accent);
+                                            ui.add_space(14.0);
+                                            self.show_quick_focus_bar(ui, &mut state, accent);
+                                            ui.add_space(12.0);
+                                            self.show_more_section(ui, &mut state);
+                                        }
+                                    });
+                            });
+                        },
+                    );
                 }
             },
         );
@@ -471,53 +472,36 @@ impl eframe::App for PomodoroApp {
 impl PomodoroApp {
     fn show_quick_focus_bar(&mut self, ui: &mut egui::Ui, state: &mut AppState, accent: Color32) {
         egui::Frame::new()
-            .fill(theme::PANEL)
+            .fill(DASHBOARD_CARD)
             .stroke(Stroke::new(1.0, CARD_BORDER))
-            .corner_radius(14.0)
-            .inner_margin(egui::Margin::symmetric(16, 11))
+            .corner_radius(16.0)
+            .inner_margin(egui::Margin::symmetric(16, 12))
             .show(ui, |ui| {
-                ui.horizontal(|ui| {
-                    ui.label(
-                        egui::RichText::new("ACTIVE TASK")
-                            .size(10.5)
-                            .strong()
-                            .color(accent),
-                    );
-                    ui.add_space(6.0);
-                    let response = ui.add(
-                        egui::TextEdit::singleline(&mut self.quick_task_input)
-                            .desired_width(280.0)
-                            .hint_text("What are you working on right now?"),
-                    );
-                    if ui
-                        .add(
-                            egui::Button::new(
-                                egui::RichText::new("Set task").size(12.0).color(theme::TEXT),
+                let narrow = ui.available_width() < 620.0;
+                let mut submit_task = false;
+                if narrow {
+                    ui.label(egui::RichText::new("ACTIVE TASK").size(10.5).strong().color(accent));
+                    ui.horizontal(|ui| {
+                        let input_width = (ui.available_width() - 88.0).max(120.0);
+                        let response = ui.add(
+                            egui::TextEdit::singleline(&mut self.quick_task_input)
+                                .desired_width(input_width)
+                                .hint_text("What are you working on right now?"),
+                        );
+                        submit_task = response.lost_focus()
+                            && ui.input(|input| input.key_pressed(Key::Enter));
+                        submit_task |= ui
+                            .add(
+                                egui::Button::new(
+                                    egui::RichText::new("Set task").size(12.0).color(theme::TEXT),
+                                )
+                                .fill(BTN_SECONDARY_FILL)
+                                .stroke(Stroke::new(1.0, BTN_SECONDARY_STROKE))
+                                .corner_radius(8.0),
                             )
-                            .fill(BTN_SECONDARY_FILL)
-                            .stroke(Stroke::new(1.0, BTN_SECONDARY_STROKE))
-                            .corner_radius(8.0),
-                        )
-                        .clicked()
-                        || (response.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter)))
-                    {
-                        match state.set_active_task(self.quick_task_input.clone()) {
-                            Ok(()) => {
-                                self.task_prompt_text = self.quick_task_input.clone();
-                                self.quick_task_saved_at = Some(Instant::now());
-                                state.error_message = None;
-                            }
-                            Err(error) => state.error_message = Some(error),
-                        }
-                    }
-                    if self
-                        .quick_task_saved_at
-                        .is_some_and(|saved| saved.elapsed() < Duration::from_secs(2))
-                    {
-                        ui.label(egui::RichText::new("Updated").size(11.5).color(OK_GREEN));
-                    }
-
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            .clicked();
+                    });
+                    ui.horizontal(|ui| {
                         ui.label(
                             egui::RichText::new(format!(
                                 "Cycle · {}m focus · {}m short · {}m long",
@@ -528,7 +512,120 @@ impl PomodoroApp {
                             .size(11.5)
                             .color(theme::MUTED),
                         );
+                        if self
+                            .quick_task_saved_at
+                            .is_some_and(|saved| saved.elapsed() < Duration::from_secs(2))
+                        {
+                            ui.label(egui::RichText::new("Updated").size(11.5).color(OK_GREEN));
+                        }
                     });
+                } else {
+                    ui.horizontal(|ui| {
+                        ui.label(
+                            egui::RichText::new("ACTIVE TASK").size(10.5).strong().color(accent),
+                        );
+                        ui.add_space(6.0);
+                        let response = ui.add(
+                            egui::TextEdit::singleline(&mut self.quick_task_input)
+                                .desired_width(280.0)
+                                .hint_text("What are you working on right now?"),
+                        );
+                        submit_task = response.lost_focus()
+                            && ui.input(|input| input.key_pressed(Key::Enter));
+                        submit_task |= ui
+                            .add(
+                                egui::Button::new(
+                                    egui::RichText::new("Set task").size(12.0).color(theme::TEXT),
+                                )
+                                .fill(BTN_SECONDARY_FILL)
+                                .stroke(Stroke::new(1.0, BTN_SECONDARY_STROKE))
+                                .corner_radius(8.0),
+                            )
+                            .clicked();
+                        if self
+                            .quick_task_saved_at
+                            .is_some_and(|saved| saved.elapsed() < Duration::from_secs(2))
+                        {
+                            ui.label(egui::RichText::new("Updated").size(11.5).color(OK_GREEN));
+                        }
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            ui.label(
+                                egui::RichText::new(format!(
+                                    "Cycle · {}m focus · {}m short · {}m long",
+                                    state.settings.study_minutes,
+                                    state.settings.short_break_minutes,
+                                    state.settings.long_break_minutes,
+                                ))
+                                .size(11.5)
+                                .color(theme::MUTED),
+                            );
+                        });
+                    });
+                }
+
+                if submit_task {
+                    match state.set_active_task(self.quick_task_input.clone()) {
+                        Ok(()) => {
+                            self.task_prompt_text = self.quick_task_input.clone();
+                            self.quick_task_saved_at = Some(Instant::now());
+                            state.error_message = None;
+                        }
+                        Err(error) => state.error_message = Some(error),
+                    }
+                }
+            });
+    }
+
+    fn show_shortcut_bar(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal(|ui| {
+            ui.label(
+                egui::RichText::new("Space · start/pause   ·   R · reset   ·   S · skip")
+                    .size(12.0)
+                    .color(theme::MUTED),
+            );
+            if ui.small_button("Keyboard help").clicked() {
+                self.show_shortcuts = true;
+            }
+        });
+    }
+
+    fn show_more_section(&mut self, ui: &mut egui::Ui, state: &mut AppState) {
+        egui::Frame::new()
+            .fill(DASHBOARD_CARD)
+            .stroke(Stroke::new(1.0, CARD_BORDER))
+            .corner_radius(16.0)
+            .inner_margin(egui::Margin::symmetric(16, 12))
+            .show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                egui::CollapsingHeader::new(
+                    egui::RichText::new("More").size(14.0).strong().color(theme::TEXT),
+                )
+                .default_open(false)
+                .show(ui, |ui| {
+                    ui.add_space(6.0);
+                    egui::CollapsingHeader::new("Phone remote & backups")
+                        .default_open(false)
+                        .show(ui, |ui| self.show_connection(ui, state));
+                    egui::CollapsingHeader::new("Preferences")
+                        .default_open(false)
+                        .show(ui, |ui| self.show_settings(ui, state));
+                    egui::CollapsingHeader::new("Weekly reflection")
+                        .default_open(false)
+                        .show(ui, |ui| self.show_weekly_reflection(ui, state));
+                    egui::CollapsingHeader::new("History & charts").default_open(false).show(
+                        ui,
+                        |ui| {
+                            charts::show(
+                                ui,
+                                &state.history,
+                                &state.notes,
+                                state.settings.weekly_goal_days,
+                            )
+                        },
+                    );
+                    egui::CollapsingHeader::new(format!("Notes · {}", state.notes.entries.len()))
+                        .default_open(false)
+                        .show(ui, |ui| self.show_notes_section(ui, state));
                 });
             });
     }
@@ -631,13 +728,13 @@ impl PomodoroApp {
         };
 
         egui::Frame::new()
-            .fill(theme::PANEL)
+            .fill(DASHBOARD_CARD)
             .stroke(Stroke::new(1.0, CARD_BORDER))
-            .corner_radius(14.0)
-            .inner_margin(egui::Margin::symmetric(18, 12))
+            .corner_radius(16.0)
+            .inner_margin(egui::Margin::symmetric(16, 14))
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
-                    ui.label(egui::RichText::new("Today").size(14.0).strong().color(theme::TEXT));
+                    ui.label(egui::RichText::new("Today").size(15.0).strong().color(theme::TEXT));
                     ui.label(egui::RichText::new(format!("· {spark}")).size(11.5).color(accent));
                     if !state.settings.active_task.trim().is_empty() {
                         ui.label(
@@ -671,41 +768,41 @@ impl PomodoroApp {
                     });
                 });
 
-                ui.add_space(6.0);
+                ui.add_space(10.0);
                 ui.columns(3, |columns| {
                     columns[0].label(
-                        egui::RichText::new("FOCUS TIME").size(9.5).strong().color(theme::MUTED),
+                        egui::RichText::new("FOCUS TIME").size(10.0).strong().color(theme::MUTED),
                     );
                     columns[0].label(
                         egui::RichText::new(readable_duration(state.history.today_seconds()))
-                            .size(17.0)
+                            .size(18.0)
                             .strong()
                             .color(theme::TEXT),
                     );
 
                     columns[1].label(
-                        egui::RichText::new("SESSIONS").size(9.5).strong().color(theme::MUTED),
+                        egui::RichText::new("SESSIONS").size(10.0).strong().color(theme::MUTED),
                     );
                     columns[1].label(
                         egui::RichText::new(sessions.to_string())
-                            .size(17.0)
+                            .size(18.0)
                             .strong()
                             .color(theme::TEXT),
                     );
                     if state.history.has_untracked_session_days() {
                         columns[1].label(
                             egui::RichText::new("Older counts weren’t stored; tracking from now.")
-                                .size(9.5)
+                                .size(10.0)
                                 .color(theme::MUTED),
                         );
                     }
 
                     columns[2].label(
-                        egui::RichText::new("DAILY GOAL").size(9.5).strong().color(theme::MUTED),
+                        egui::RichText::new("DAILY GOAL").size(10.0).strong().color(theme::MUTED),
                     );
                     if state.settings.daily_goal_minutes == 0 {
                         columns[2]
-                            .label(egui::RichText::new("Not set").size(14.0).color(theme::MUTED));
+                            .label(egui::RichText::new("Not set").size(15.0).color(theme::MUTED));
                     } else {
                         let goal_seconds = u64::from(state.settings.daily_goal_minutes) * 60;
                         let today_seconds = state.history.today_seconds();
@@ -716,14 +813,14 @@ impl PomodoroApp {
                                 readable_duration(today_seconds),
                                 readable_duration(goal_seconds)
                             ))
-                            .size(14.0)
+                            .size(15.0)
                             .strong()
                             .color(theme::TEXT),
                         );
                         columns[2].add_space(2.0);
                         columns[2].add(
                             egui::ProgressBar::new(ratio)
-                                .desired_width(140.0)
+                                .desired_width(columns[2].available_width())
                                 .fill(if ratio >= 1.0 { OK_GREEN } else { accent }),
                         );
                     }
@@ -734,7 +831,7 @@ impl PomodoroApp {
                 let weekly_streak = state.history.weekly_streak(state.settings.weekly_goal_days);
                 let weekly_ratio = (weekly_days as f32 / weekly_goal as f32).clamp(0.0, 1.0);
 
-                ui.add_space(6.0);
+                ui.add_space(10.0);
                 ui.label(
                     egui::RichText::new(format!(
                         "This week · {weekly_days}/{} focus days · {weekly_streak}-week rhythm · rest days are okay",
@@ -840,7 +937,8 @@ impl PomodoroApp {
                         .is_some_and(|saved| saved.elapsed() < Duration::from_secs(3))
                     {
                         ui.label(
-                            egui::RichText::new(format!("Saved for {tomorrow_key}")).color(OK_GREEN),
+                            egui::RichText::new(format!("Saved for {tomorrow_key}"))
+                                .color(OK_GREEN),
                         );
                     }
                 });
@@ -924,7 +1022,8 @@ impl PomodoroApp {
                         };
                         match state.save_weekly_reflection(reflection) {
                             Ok(()) => {
-                                self.reflection_saved_snapshot = state.current_week_reflection.clone();
+                                self.reflection_saved_snapshot =
+                                    state.current_week_reflection.clone();
                                 self.reflection_saved_at = Some(Instant::now());
                                 state.error_message = None;
                             }
@@ -964,7 +1063,10 @@ impl PomodoroApp {
         painter.circle_stroke(
             center,
             outer_radius,
-            Stroke::new(1.5, Color32::from_rgba_unmultiplied(accent.r(), accent.g(), accent.b(), 75)),
+            Stroke::new(
+                1.5,
+                Color32::from_rgba_unmultiplied(accent.r(), accent.g(), accent.b(), 75),
+            ),
         );
 
         // Dial surface + subtle inner rim
@@ -1071,9 +1173,11 @@ impl PomodoroApp {
 
     fn show_controls(&self, ui: &mut egui::Ui, state: &mut AppState, accent: Color32) {
         let available_width = ui.available_width().min(540.0);
-        let gap = 10.0;
-        let side_width = (available_width * 0.17).clamp(52.0, 82.0);
-        let main_width = (available_width - side_width * 2.0 - gap * 2.0).max(110.0);
+        let gap = 12.0;
+        let item_spacing = ui.spacing().item_spacing.x;
+        let button_width = (available_width - 2.0 * (gap + item_spacing)).max(0.0);
+        let side_width = (button_width * 0.17).clamp(52.0, 82.0);
+        let main_width = (button_width - side_width * 2.0).max(110.0);
         ui.horizontal(|ui| {
             if secondary_button(ui, "Skip", side_width).clicked()
                 && let Err(error) = state.execute_command("skip")
@@ -1334,7 +1438,16 @@ impl PomodoroApp {
                 if ui.checkbox(&mut settings.compact_timer, "Use compact timer window").changed() {
                     changed = true;
                 }
-                if ui.checkbox(&mut settings.always_on_top, "Keep timer above other windows").changed() {
+                if ui
+                    .checkbox(&mut settings.always_on_top, "Keep timer above other windows")
+                    .changed()
+                {
+                    changed = true;
+                }
+                if ui
+                    .checkbox(&mut settings.pause_when_minimized, "Pause timer when minimizing")
+                    .changed()
+                {
                     changed = true;
                 }
                 if changed {
@@ -1437,9 +1550,7 @@ impl PomodoroApp {
                                     .id(egui::Id::new(("note-edit-acc", &editing.id))),
                             );
 
-                            ui.label(
-                                egui::RichText::new("Subject").size(11.0).color(theme::MUTED),
-                            );
+                            ui.label(egui::RichText::new("Subject").size(11.0).color(theme::MUTED));
                             ui.add(
                                 egui::TextEdit::singleline(&mut editing.subject)
                                     .desired_width(f32::INFINITY)
@@ -2009,6 +2120,7 @@ fn setting_control(
 ) -> bool {
     let mut changed = false;
     ui.vertical(|ui| {
+        ui.set_min_width(104.0);
         ui.label(egui::RichText::new(label).size(12.0).color(theme::MUTED));
         changed |=
             ui.add(egui::DragValue::new(value).range(range).speed(0.1).suffix(" min")).changed();

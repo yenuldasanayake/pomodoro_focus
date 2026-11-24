@@ -35,6 +35,8 @@ pub struct Settings {
     pub compact_timer: bool,
     #[serde(default)]
     pub always_on_top: bool,
+    #[serde(default)]
+    pub pause_when_minimized: bool,
     #[serde(default = "legacy_setup_complete")]
     pub onboarding_complete: bool,
 }
@@ -69,6 +71,7 @@ impl Default for Settings {
             launch_at_startup: false,
             compact_timer: false,
             always_on_top: false,
+            pause_when_minimized: false,
             onboarding_complete: false,
         }
     }
@@ -117,6 +120,7 @@ mod settings_tests {
         assert!(!settings.close_to_tray);
         assert!(!settings.compact_timer);
         assert!(!settings.always_on_top);
+        assert!(!settings.pause_when_minimized);
     }
 
     #[test]
@@ -190,6 +194,20 @@ mod settings_tests {
     fn startup_setting_defaults_off() {
         let settings: Settings = serde_json::from_str(r#"{}"#).unwrap();
         assert!(!settings.launch_at_startup);
+    }
+
+    #[test]
+    fn pause_when_minimized_defaults_off() {
+        let settings: Settings = serde_json::from_str(r#"{}"#).unwrap();
+        assert!(!settings.pause_when_minimized);
+    }
+
+    #[test]
+    fn pause_when_minimized_round_trips() {
+        let settings = Settings { pause_when_minimized: true, ..Settings::default() };
+        let saved = serde_json::to_string(&settings).unwrap();
+        let loaded: Settings = serde_json::from_str(&saved).unwrap();
+        assert!(loaded.pause_when_minimized);
     }
 
     #[test]
