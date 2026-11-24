@@ -10,7 +10,7 @@ use crate::{
 use axum::{
     Json, Router,
     extract::{ConnectInfo, State},
-    http::{StatusCode, header},
+    http::{HeaderMap, StatusCode, header},
     response::{Html, IntoResponse, Response},
     routing::{get, post},
 };
@@ -33,6 +33,9 @@ const AUTH_WINDOW: Duration = Duration::from_secs(60);
 const AUTH_LOCKOUT: Duration = Duration::from_secs(60);
 const AUTH_MAX_FAILURES: u32 = 5;
 const AUTH_RECORD_TTL: Duration = Duration::from_secs(300);
+const REMOTE_SESSION_LIFETIME: Duration = Duration::from_secs(8 * 60 * 60);
+const PAIRING_CODE_LIFETIME: Duration = Duration::from_secs(2 * 60);
+const MAX_REMOTE_SESSIONS: usize = 12;
 const UNDO_WINDOW: Duration = Duration::from_secs(30);
 const POWER_ACTION_DELAY_SECS: u32 = 30;
 
@@ -47,6 +50,13 @@ pub enum PowerAction {
 pub struct PendingPowerAction {
     pub action: PowerAction,
     pub deadline: Instant,
+}
+
+#[derive(Clone)]
+pub struct RemoteSessionInfo {
+    pub id: u64,
+    pub ip: IpAddr,
+    pub expires_in: Duration,
 }
 
 pub struct AppState {
@@ -69,6 +79,8 @@ pub struct AppState {
     pub ctx: egui::Context,
     pub storage: Storage,
     auth: AuthState,
+    pairing_token: String,
+    pairing_expires_at: Instant,
     undo_deleted_notes: Vec<(Instant, StudyNote)>,
     history_dirty: bool,
     last_history_flush: Instant,
@@ -81,6 +93,14 @@ pub struct AppState {
 #[derive(Default)]
 struct AuthState {
     failures: HashMap<IpAddr, FailureRecord>,
+    sessions: HashMap<String, RemoteSession>,
+    next_session_id: u64,
+}
+
+struct RemoteSession {
+    id: u64,
+    ip: IpAddr,
+    expires_at: Instant,
 }
 
 struct FailureRecord {
@@ -93,6 +113,7 @@ struct FailureRecord {
 impl AuthState {
     fn prune(&mut self, now: Instant) {
         self.failures.retain(|_, record| now.duration_since(record.last_seen) < AUTH_RECORD_TTL);
+        self.sessions.retain(|_, session| session.expires_at > now);
     }
 
     fn record_success(&mut self, ip: IpAddr) {
@@ -158,6 +179,8 @@ impl AppState {
 
         let pin = settings.pin.clone();
         let port = settings.port;
+        let pairing_token = generate_session_token()?;
+        let pairing_expires_at = Instant::now() + PAIRING_CODE_LIFETIME;
 
         Ok(Self {
             settings,
@@ -179,6 +202,8 @@ impl AppState {
             ctx,
             storage,
             auth: AuthState::default(),
+            pairing_token,
+            pairing_expires_at,
             undo_deleted_notes: Vec::new(),
             history_dirty: false,
             last_history_flush: Instant::now(),
@@ -191,6 +216,50 @@ impl AppState {
 
     pub fn undo_available(&self) -> bool {
         self.undo_deleted_notes.last().is_some_and(|(when, _)| when.elapsed() < UNDO_WINDOW)
+    }
+
+    pub fn pairing_code(&mut self) -> Result<(String, Duration), String> {
+        let now = Instant::now();
+        if self.pairing_expires_at <= now {
+            self.pairing_token = generate_session_token()
+                .map_err(|error| format!("Could not create a QR pairing code: {error}"))?;
+            self.pairing_expires_at = now + PAIRING_CODE_LIFETIME;
+        }
+        let remaining = self.pairing_expires_at.saturating_duration_since(now);
+        self.ctx.request_repaint_after(remaining);
+        Ok((self.pairing_token.clone(), remaining))
+    }
+
+    pub fn remote_sessions(&mut self) -> Vec<RemoteSessionInfo> {
+        let now = Instant::now();
+        self.auth.prune(now);
+        let mut sessions: Vec<_> = self
+            .auth
+            .sessions
+            .values()
+            .map(|session| RemoteSessionInfo {
+                id: session.id,
+                ip: session.ip,
+                expires_in: session.expires_at.saturating_duration_since(now),
+            })
+            .collect();
+        sessions.sort_by_key(|session| session.id);
+        sessions
+    }
+
+    pub fn revoke_remote_session(&mut self, id: u64) -> bool {
+        let token = self
+            .auth
+            .sessions
+            .iter()
+            .find_map(|(token, session)| (session.id == id).then(|| token.clone()));
+        token.is_some_and(|token| self.auth.sessions.remove(&token).is_some())
+    }
+
+    pub fn revoke_all_remote_sessions(&mut self) -> usize {
+        let count = self.auth.sessions.len();
+        self.auth.sessions.clear();
+        count
     }
 
     pub fn power_control_available(&self) -> bool {
@@ -535,6 +604,8 @@ impl AppState {
             .map_err(|error| format!("Could not save the new PIN: {error}"))?;
         self.settings = settings;
         self.pin = new_pin;
+        self.revoke_all_remote_sessions();
+        self.pairing_expires_at = Instant::now();
         self.ctx.request_repaint();
         Ok(())
     }
@@ -718,11 +789,59 @@ mod timekeeping_tests {
     }
 }
 
+#[cfg(test)]
+mod remote_session_tests {
+    use super::{AuthState, RemoteSession};
+    use std::{
+        net::{IpAddr, Ipv4Addr},
+        time::{Duration, Instant},
+    };
+
+    #[test]
+    fn expired_sessions_are_pruned_without_removing_active_sessions() {
+        let now = Instant::now();
+        let mut auth = AuthState::default();
+        auth.sessions.insert(
+            "expired".to_owned(),
+            RemoteSession {
+                id: 1,
+                ip: IpAddr::V4(Ipv4Addr::LOCALHOST),
+                expires_at: now - Duration::from_secs(1),
+            },
+        );
+        auth.sessions.insert(
+            "active".to_owned(),
+            RemoteSession {
+                id: 2,
+                ip: IpAddr::V4(Ipv4Addr::LOCALHOST),
+                expires_at: now + Duration::from_secs(1),
+            },
+        );
+
+        auth.prune(now);
+
+        assert!(!auth.sessions.contains_key("expired"));
+        assert!(auth.sessions.contains_key("active"));
+    }
+}
+
 pub fn generate_pin() -> Result<String, getrandom::Error> {
     let mut bytes = [0u8; 4];
     getrandom::fill(&mut bytes)?;
     let value = 10_000_000 + (u32::from_ne_bytes(bytes) % 90_000_000);
     Ok(value.to_string())
+}
+
+fn generate_session_token() -> Result<String, getrandom::Error> {
+    let mut bytes = [0u8; 32];
+    getrandom::fill(&mut bytes)?;
+
+    let mut token = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        token.push(char::from(b"0123456789abcdef"[(byte >> 4) as usize]));
+        token.push(char::from(b"0123456789abcdef"[(byte & 0x0f) as usize]));
+    }
+    Ok(token)
 }
 
 pub fn local_url_for_port(port: u16) -> String {
@@ -740,6 +859,8 @@ pub fn build_router(state: SharedState) -> Router {
         .route("/", get(mobile_page))
         .route("/manifest.json", get(manifest))
         .route("/icon.svg", get(icon))
+        .route("/auth/pair", post(pair_device))
+        .route("/auth/logout", post(logout_device))
         .route("/status", get(status))
         .route("/command", post(command))
         .route("/settings", post(update_settings))
@@ -915,8 +1036,71 @@ struct StatusResponse {
     launch_at_startup: bool,
 }
 
-async fn status(State(shared): State<SharedState>) -> Result<Json<StatusResponse>, ApiError> {
+#[derive(Deserialize)]
+struct PairRequest {
+    #[serde(default)]
+    pin: Option<String>,
+    #[serde(default)]
+    pairing_token: Option<String>,
+}
+
+#[derive(Serialize)]
+struct PairResponse {
+    token: String,
+    expires_in_seconds: u64,
+}
+
+async fn pair_device(
+    State(shared): State<SharedState>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    Json(request): Json<PairRequest>,
+) -> Result<Json<PairResponse>, ApiError> {
     let mut state = shared.lock().map_err(|_| ApiError::internal("App state is unavailable"))?;
+    let now = Instant::now();
+    state.auth.prune(now);
+    if state.auth.sessions.len() >= MAX_REMOTE_SESSIONS {
+        return Err(ApiError::rate_limited(
+            "The maximum number of paired devices has been reached. Revoke a device from Kronari.",
+        ));
+    }
+
+    match (request.pin.as_deref(), request.pairing_token.as_deref()) {
+        (Some(pin), None) => verify_pin(&mut state, addr.ip(), pin)?,
+        (None, Some(pairing_token)) => verify_pairing_code(&mut state, pairing_token)?,
+        _ => {
+            return Err(ApiError::bad_request(
+                "Provide either a PIN or a QR pairing code".to_owned(),
+            ));
+        }
+    }
+
+    let token = generate_session_token()
+        .map_err(|error| ApiError::internal(format!("Could not create device session: {error}")))?;
+    let id = state.auth.next_session_id.wrapping_add(1).max(1);
+    state.auth.next_session_id = id;
+    state.auth.sessions.insert(
+        token.clone(),
+        RemoteSession { id, ip: addr.ip(), expires_at: now + REMOTE_SESSION_LIFETIME },
+    );
+
+    Ok(Json(PairResponse { token, expires_in_seconds: REMOTE_SESSION_LIFETIME.as_secs() }))
+}
+
+fn bearer_token(headers: &HeaderMap) -> Result<&str, ApiError> {
+    headers
+        .get(header::AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.strip_prefix("Bearer "))
+        .filter(|token| !token.is_empty())
+        .ok_or_else(|| ApiError::unauthorized("Pair this device with the PIN shown in Kronari"))
+}
+
+async fn status(
+    State(shared): State<SharedState>,
+    headers: HeaderMap,
+) -> Result<Json<StatusResponse>, ApiError> {
+    let mut state = shared.lock().map_err(|_| ApiError::internal("App state is unavailable"))?;
+    verify_session(&mut state, bearer_token(&headers)?)?;
     state.tick();
 
     let today_seconds = state.history.today_seconds();
@@ -975,18 +1159,12 @@ async fn status(State(shared): State<SharedState>) -> Result<Json<StatusResponse
     }))
 }
 
-#[derive(Deserialize)]
-struct TokenQuery {
-    token: String,
-}
-
 async fn export_history_csv(
     State(shared): State<SharedState>,
-    ConnectInfo(addr): ConnectInfo<SocketAddr>,
-    axum::extract::Query(query): axum::extract::Query<TokenQuery>,
+    headers: HeaderMap,
 ) -> Result<impl IntoResponse, ApiError> {
     let mut state = shared.lock().map_err(|_| ApiError::internal("App state is unavailable"))?;
-    verify_token(&mut state, addr.ip(), &query.token)?;
+    verify_session(&mut state, bearer_token(&headers)?)?;
     state.tick();
     let body = export::history_csv(&state.history);
     Ok((
@@ -998,11 +1176,10 @@ async fn export_history_csv(
 
 async fn export_notes_csv(
     State(shared): State<SharedState>,
-    ConnectInfo(addr): ConnectInfo<SocketAddr>,
-    axum::extract::Query(query): axum::extract::Query<TokenQuery>,
+    headers: HeaderMap,
 ) -> Result<impl IntoResponse, ApiError> {
     let mut state = shared.lock().map_err(|_| ApiError::internal("App state is unavailable"))?;
-    verify_token(&mut state, addr.ip(), &query.token)?;
+    verify_session(&mut state, bearer_token(&headers)?)?;
     state.tick();
     let body = export::notes_csv(&state.notes);
     Ok((
@@ -1014,11 +1191,10 @@ async fn export_notes_csv(
 
 async fn export_all_csv(
     State(shared): State<SharedState>,
-    ConnectInfo(addr): ConnectInfo<SocketAddr>,
-    axum::extract::Query(query): axum::extract::Query<TokenQuery>,
+    headers: HeaderMap,
 ) -> Result<impl IntoResponse, ApiError> {
     let mut state = shared.lock().map_err(|_| ApiError::internal("App state is unavailable"))?;
-    verify_token(&mut state, addr.ip(), &query.token)?;
+    verify_session(&mut state, bearer_token(&headers)?)?;
     state.tick();
     let body = export::all_csv(&state.history, &state.notes);
     Ok((
@@ -1030,11 +1206,10 @@ async fn export_all_csv(
 
 async fn export_all_json(
     State(shared): State<SharedState>,
-    ConnectInfo(addr): ConnectInfo<SocketAddr>,
-    axum::extract::Query(query): axum::extract::Query<TokenQuery>,
+    headers: HeaderMap,
 ) -> Result<impl IntoResponse, ApiError> {
     let mut state = shared.lock().map_err(|_| ApiError::internal("App state is unavailable"))?;
-    verify_token(&mut state, addr.ip(), &query.token)?;
+    verify_session(&mut state, bearer_token(&headers)?)?;
     state.tick();
     let body = export::all_json(&state.history, &state.notes, &state.reflections);
     Ok((
@@ -1337,6 +1512,17 @@ struct TokenOnlyRequest {
     token: String,
 }
 
+async fn logout_device(
+    State(shared): State<SharedState>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    Json(request): Json<TokenOnlyRequest>,
+) -> Result<Json<MessageResponse>, ApiError> {
+    let mut state = shared.lock().map_err(|_| ApiError::internal("App state is unavailable"))?;
+    verify_token(&mut state, addr.ip(), &request.token)?;
+    state.auth.sessions.remove(&request.token);
+    Ok(Json(MessageResponse { ok: true, warning: None }))
+}
+
 async fn undo_delete_note(
     State(shared): State<SharedState>,
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
@@ -1414,7 +1600,7 @@ async fn power_cancel(
     Ok(Json(MessageResponse { ok: true, warning: None }))
 }
 
-fn verify_token(state: &mut AppState, ip: IpAddr, token: &str) -> Result<(), ApiError> {
+fn verify_pin(state: &mut AppState, ip: IpAddr, pin: &str) -> Result<(), ApiError> {
     let now = Instant::now();
 
     if let Some(record) = state.auth.failures.get(&ip) {
@@ -1425,12 +1611,38 @@ fn verify_token(state: &mut AppState, ip: IpAddr, token: &str) -> Result<(), Api
         }
     }
 
-    if state.pin == token {
+    if state.pin == pin {
         state.auth.record_success(ip);
         Ok(())
     } else {
         state.auth.record_failure(ip, now);
         Err(ApiError::unauthorized("Incorrect PIN"))
+    }
+}
+
+fn verify_pairing_code(state: &mut AppState, token: &str) -> Result<(), ApiError> {
+    let now = Instant::now();
+    if token == state.pairing_token && now < state.pairing_expires_at {
+        state.pairing_expires_at = now;
+        state.ctx.request_repaint();
+        Ok(())
+    } else {
+        Err(ApiError::unauthorized("QR pairing code expired or is invalid"))
+    }
+}
+
+fn verify_token(state: &mut AppState, _ip: IpAddr, token: &str) -> Result<(), ApiError> {
+    verify_session(state, token)
+}
+
+fn verify_session(state: &mut AppState, token: &str) -> Result<(), ApiError> {
+    state.auth.prune(Instant::now());
+    if state.auth.sessions.contains_key(token) {
+        Ok(())
+    } else {
+        Err(ApiError::unauthorized(
+            "This device session has expired or was revoked. Pair this device again.",
+        ))
     }
 }
 

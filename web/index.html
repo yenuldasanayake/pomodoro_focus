@@ -28,6 +28,7 @@ body{
   transition:background .6s ease;
 }
 main{width:min(100% - 28px,480px);margin:0 auto;padding:28px 0 56px}
+.pair-screen{width:min(100% - 28px,480px);margin:0 auto;padding:28px 0 56px}
 .eyebrow{color:var(--muted);letter-spacing:.18em;font-size:.7rem;font-weight:700;text-transform:uppercase}
 h1{font-size:1.35rem;margin:6px 0 22px;font-weight:600;letter-spacing:-.01em}
 .card{background:color-mix(in srgb,var(--panel) 94%,transparent);border:1px solid var(--border);border-radius:var(--radius);padding:22px;margin:14px 0;backdrop-filter:blur(8px);transition:border-color .3s ease}
@@ -62,8 +63,6 @@ input:focus{outline:none;border-color:var(--accent)}
 .check-row input{width:18px;height:18px;accent-color:var(--accent);cursor:pointer}
 .check-row span{color:var(--muted);font-size:.85rem}
 .grid{display:grid;grid-template-columns:1fr 1fr;gap:4px 12px}
-.token{display:flex;gap:8px}
-.token input{flex:1}
 .notes-list{margin-top:12px;display:flex;flex-direction:column;gap:8px}
 .note{background:var(--bg2);border:1px solid var(--border);border-radius:16px;padding:12px 14px;display:flex;flex-direction:column;gap:6px}
 .note .head{display:flex;justify-content:space-between;align-items:center;gap:8px}
@@ -72,6 +71,7 @@ input:focus{outline:none;border-color:var(--accent)}
 .note .body{font-size:.9rem;line-height:1.4;word-break:break-word}
 .note .footer{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-top:2px}
 .credit{text-align:center;color:var(--muted);font-size:.75rem;margin-top:22px}
+#pair-error{color:#f28b82;min-height:1.2em}
 .note .dur{color:var(--muted);font-size:.72rem}
 .note .actions{display:flex;gap:6px}
 .note .icon-btn{background:transparent;border:1px solid var(--border);color:var(--muted);border-radius:10px;padding:5px 9px;font-size:.72rem;font-weight:600;cursor:pointer;font-family:inherit}
@@ -107,7 +107,20 @@ body.flash::before{content:"";position:fixed;inset:0;background:var(--accent);op
 </style>
 </head>
 <body>
-<main>
+<section id="pair-screen" class="pair-screen">
+  <div class="eyebrow">KRONARI REMOTE</div>
+  <h1>Pair this device</h1>
+  <section class="card">
+    <p class="today" style="margin-top:0">Enter the 8-digit PIN shown in Kronari on your PC. This session expires after 8 hours. Use only on a trusted Wi-Fi network; remote traffic is not encrypted.</p>
+    <label for="pair-pin">PC PIN</label>
+    <input id="pair-pin" inputmode="numeric" maxlength="8" placeholder="8-digit PIN" autocomplete="one-time-code">
+    <button id="pair-submit" class="button primary wide" style="margin-top:12px" onclick="pairDevice()">Pair device</button>
+    <p id="pair-error" role="alert"></p>
+  </section>
+  <div class="credit">Created by Yenul Dasanayake</div>
+</section>
+
+<main style="display:none">
   <div class="eyebrow">Kronari</div>
   <h1>Your focus, in sync.</h1>
 
@@ -164,10 +177,10 @@ body.flash::before{content:"";position:fixed;inset:0;background:var(--accent);op
     <summary class="eyebrow">Export data</summary>
     <p class="today" style="margin-top:6px">Download your history, notes, and weekly reflections.</p>
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:14px">
-      <a class="button ghost" id="export-history" target="_blank" rel="noopener">History CSV</a>
-      <a class="button ghost" id="export-notes" target="_blank" rel="noopener">Notes CSV</a>
-      <a class="button ghost" id="export-all-csv" target="_blank" rel="noopener">All CSV</a>
-      <a class="button primary" id="export-all-json" target="_blank" rel="noopener">All JSON</a>
+      <a class="button ghost" id="export-history" href="#" onclick="downloadExport('/export/history.csv','history.csv');return false">History CSV</a>
+      <a class="button ghost" id="export-notes" href="#" onclick="downloadExport('/export/notes.csv','notes.csv');return false">Notes CSV</a>
+      <a class="button ghost" id="export-all-csv" href="#" onclick="downloadExport('/export/all.csv','all.csv');return false">All CSV</a>
+      <a class="button primary" id="export-all-json" href="#" onclick="downloadExport('/export/all.json','all.json');return false">All JSON</a>
     </div>
   </details>
 
@@ -194,11 +207,8 @@ body.flash::before{content:"";position:fixed;inset:0;background:var(--accent);op
 
   <details class="card">
     <summary class="eyebrow">Remote access & settings</summary>
-    <label for="pin">PIN shown on your PC</label>
-    <div class="token">
-      <input id="pin" inputmode="numeric" maxlength="8" placeholder="8-digit PIN" autocomplete="off">
-      <button class="button ghost" onclick="forgetPin()">Forget</button>
-    </div>
+    <p class="today" style="margin-top:6px">This device’s session expires after 8 hours. You can also revoke it from Kronari on your PC.</p>
+    <button class="button ghost wide" style="margin-top:10px" onclick="forgetDevice()">Sign out this device</button>
 
     <div class="eyebrow" style="margin-top:22px">Timer settings</div>
     <div class="grid">
@@ -262,7 +272,8 @@ body.flash::before{content:"";position:fixed;inset:0;background:var(--accent);op
 const colors={study:"#8ab4f8",short_break:"#81c995",long_break:"#f28b82"};
 const LABELS={study:"FOCUS SESSION",short_break:"SHORT BREAK",long_break:"LONG BREAK"};
 const $=id=>document.getElementById(id);
-const PIN_KEY="pomodoro-pin";
+const SESSION_KEY="kronari-session";
+localStorage.removeItem("pomodoro-pin");
 
 let loaded=false;
 let lastMode=null;
@@ -275,18 +286,70 @@ let editDraft={accomplishment:"",subject:""};
 let lastNoteSignature="";
 let lastNotes=[];
 
-function pin(){return $("pin").value.trim()}
-function forgetPin(){localStorage.removeItem(PIN_KEY);$("pin").value="";toast("PIN forgotten")}
-(function hydratePin(){const s=localStorage.getItem(PIN_KEY);if(s)$("pin").value=s})();
-(function hydrateQrPin(){
-  const qrPin=new URLSearchParams(location.hash.slice(1)).get("pin");
-  if(qrPin===null)return;
-  if(/^\d{8}$/.test(qrPin)){
-    $("pin").value=qrPin;
-    localStorage.setItem(PIN_KEY,qrPin);
+function sessionToken(){return localStorage.getItem(SESSION_KEY)||""}
+function showPairScreen(message=""){
+  $("pair-screen").style.display="block";
+  document.querySelector("main").style.display="none";
+  $("pair-error").textContent=message;
+}
+function showRemote(){
+  $("pair-screen").style.display="none";
+  document.querySelector("main").style.display="block";
+}
+function clearDeviceSession(message){
+  localStorage.removeItem(SESSION_KEY);
+  if(pollTimer)clearInterval(pollTimer);
+  pollTimer=null;
+  showPairScreen(message);
+}
+async function forgetDevice(){
+  const token=sessionToken();
+  if(token){
+    try{
+      const response=await fetch("/auth/logout",{
+        method:"POST",
+        headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({token})
+      });
+      if(!response.ok){
+        const result=await response.json().catch(()=>({}));
+        toast(result.error||"Could not revoke this device session","error");
+      }
+    }catch(_){
+      toast("Could not reach Kronari to revoke this session","error");
+    }
   }
-  history.replaceState(null,"",location.pathname+location.search);
-})();
+  clearDeviceSession("Signed out on this device.");
+}
+async function pairDevice(pairingCode){
+  const pin=$("pair-pin").value.trim();
+  if(!pairingCode&&!/^\d{8}$/.test(pin)){
+    $("pair-error").textContent="Enter the 8-digit PIN shown in Kronari.";
+    return;
+  }
+  const button=$("pair-submit");
+  button.disabled=true;
+  $("pair-error").textContent="";
+  try{
+    const response=await fetch("/auth/pair",{
+      method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body:JSON.stringify(pairingCode?{pairing_token:pairingCode}:{pin})
+    });
+    const result=await response.json().catch(()=>({}));
+    if(!response.ok)throw new Error(result.error||("Pairing failed ("+response.status+")"));
+    if(typeof result.token!=="string")throw new Error("Pairing response was invalid");
+    localStorage.setItem(SESSION_KEY,result.token);
+    $("pair-pin").value="";
+    showRemote();
+    await refresh();
+    startPolling();
+  }catch(error){
+    $("pair-error").textContent=error.message;
+  }finally{
+    button.disabled=false;
+  }
+}
 
 function toast(text,kind){
   const el=document.createElement("div");
@@ -306,15 +369,34 @@ async function post(path,data){
   const res=await fetch(path,{
     method:"POST",
     headers:{"Content-Type":"application/json"},
-    body:JSON.stringify({...data,token:pin()})
+    body:JSON.stringify({...data,token:sessionToken()})
   });
   const result=await res.json().catch(()=>({}));
   if(!res.ok){
-    if(res.status===401)localStorage.removeItem(PIN_KEY);
+    if(res.status===401)clearDeviceSession("Session expired or revoked. Pair this device again.");
     throw new Error(result.error||("Request failed ("+res.status+")"));
   }
-  if(!path.endsWith("/status"))localStorage.setItem(PIN_KEY,pin());
   return result;
+}
+
+async function downloadExport(path,filename){
+  try{
+    const response=await fetch(path,{headers:{Authorization:"Bearer "+sessionToken()}});
+    if(response.status===401){
+      clearDeviceSession("Session expired or revoked. Pair this device again.");
+      return;
+    }
+    if(!response.ok){
+      const result=await response.json().catch(()=>({}));
+      throw new Error(result.error||("Download failed ("+response.status+")"));
+    }
+    const url=URL.createObjectURL(await response.blob());
+    const link=document.createElement("a");
+    link.href=url;
+    link.download=filename;
+    link.click();
+    setTimeout(()=>URL.revokeObjectURL(url),1000);
+  }catch(error){toast(error.message,"error")}
 }
 
 async function sendCommand(command){
@@ -509,15 +591,6 @@ function renderNotes(notes){
   }
 }
 
-function updateExportLinks(){
-  const token=pin();
-  const qs=token?`?token=${encodeURIComponent(token)}`:"";
-  $("export-history").href=`/export/history.csv${qs}`;
-  $("export-notes").href=`/export/notes.csv${qs}`;
-  $("export-all-csv").href=`/export/all.csv${qs}`;
-  $("export-all-json").href=`/export/all.json${qs}`;
-}
-
 function renderGoal(s){
   const bar=$("goal-bar");
   if(!s.daily_goal_minutes||s.daily_goal_minutes<=0){
@@ -673,8 +746,20 @@ function applyMode(mode){
 }
 
 async function refresh(){
+  if(!sessionToken()){
+    showPairScreen();
+    return;
+  }
   try{
-    const s=await(await fetch("/status")).json();
+    const response=await fetch("/status",{
+      headers:{Authorization:"Bearer "+sessionToken()}
+    });
+    if(response.status===401){
+      clearDeviceSession("Session expired or revoked. Pair this device again.");
+      return;
+    }
+    if(!response.ok)throw new Error("Status request failed ("+response.status+")");
+    const s=await response.json();
     document.body.classList.remove("offline");
 
     if(lastMode!==null && lastMode!==s.mode){
@@ -764,7 +849,6 @@ async function refresh(){
       banner.style.display="none";
     }
 
-    updateExportLinks();
   }catch(_){
     document.body.classList.add("offline");
     $("mode").textContent="PC NOT CONNECTED";
@@ -773,17 +857,35 @@ async function refresh(){
 
 function startPolling(){
   if(pollTimer)clearInterval(pollTimer);
+  pollTimer=null;
+  if(!sessionToken())return;
   pollTimer=setInterval(refresh,1000);
 }
 
 document.addEventListener("visibilitychange",()=>{
   if(document.hidden)clearInterval(pollTimer);
-  else{refresh();startPolling()}
+  else if(sessionToken()){refresh();startPolling()}
 });
 
-updateExportLinks();
-refresh();
-startPolling();
+function startRemote(){
+  const pairingCode=new URLSearchParams(location.hash.slice(1)).get("pair");
+  if(location.hash)history.replaceState(null,"",location.pathname+location.search);
+  if(pairingCode){
+    showPairScreen();
+    pairDevice(pairingCode);
+  }else if(sessionToken()){
+    showRemote();
+    refresh();
+    startPolling();
+  }else{
+    showPairScreen();
+  }
+}
+
+$("pair-pin").addEventListener("keydown",event=>{
+  if(event.key==="Enter")pairDevice();
+});
+startRemote();
 </script>
 </body>
 </html>

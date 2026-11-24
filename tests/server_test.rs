@@ -40,13 +40,51 @@ async fn body_json<T: serde::de::DeserializeOwned>(body: Body) -> T {
     serde_json::from_slice(&bytes).unwrap()
 }
 
+async fn pair_session(app: axum::Router, pin: &str) -> String {
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/auth/pair")
+                .header("Content-Type", "application/json")
+                .extension(axum::extract::ConnectInfo(addr()))
+                .body(Body::from(format!(r#"{{"pin":"{pin}"}}"#)))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let json: serde_json::Value = body_json(response.into_body()).await;
+    json["token"].as_str().unwrap().to_owned()
+}
+
+#[tokio::test]
+async fn status_requires_a_paired_session() {
+    let (state, root, _pin) = test_state("unpaired-status");
+    let response = build_router(state)
+        .oneshot(Request::builder().uri("/status").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    let _ = std::fs::remove_dir_all(&root);
+}
+
 #[tokio::test]
 async fn status_returns_shape() {
-    let (state, root, _pin) = test_state("status");
+    let (state, root, pin) = test_state("status");
     let app = build_router(state);
+    let token = pair_session(app.clone(), &pin).await;
 
-    let response =
-        app.oneshot(Request::builder().uri("/status").body(Body::empty()).unwrap()).await.unwrap();
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/status")
+                .header("Authorization", format!("Bearer {token}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
 
     assert_eq!(response.status(), StatusCode::OK);
     let json: serde_json::Value = body_json(response.into_body()).await;
@@ -61,6 +99,44 @@ async fn status_returns_shape() {
 }
 
 #[tokio::test]
+async fn qr_pairing_code_is_single_use() {
+    let (state, root, _pin) = test_state("qr-pairing");
+    let app = build_router(state.clone());
+    let code = state.lock().unwrap().pairing_code().unwrap().0;
+    let body = format!(r#"{{"pairing_token":"{code}"}}"#);
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/auth/pair")
+                .header("Content-Type", "application/json")
+                .extension(axum::extract::ConnectInfo(addr()))
+                .body(Body::from(body.clone()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/auth/pair")
+                .header("Content-Type", "application/json")
+                .extension(axum::extract::ConnectInfo(addr()))
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[tokio::test]
 async fn command_rejects_wrong_pin() {
     let (state, root, _pin) = test_state("wrong-pin");
     let app = build_router(state);
@@ -69,10 +145,10 @@ async fn command_rejects_wrong_pin() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/command")
+                .uri("/auth/pair")
                 .header("Content-Type", "application/json")
                 .extension(axum::extract::ConnectInfo(addr()))
-                .body(Body::from(r#"{"token":"00000000","command":"start"}"#))
+                .body(Body::from(r#"{"pin":"00000000"}"#))
                 .unwrap(),
         )
         .await
@@ -84,11 +160,12 @@ async fn command_rejects_wrong_pin() {
 }
 
 #[tokio::test]
-async fn command_accepts_correct_pin() {
+async fn command_accepts_a_paired_session() {
     let (state, root, pin) = test_state("ok-pin");
     let app = build_router(state);
+    let token = pair_session(app.clone(), &pin).await;
 
-    let body = format!(r#"{{"token":"{pin}","command":"start"}}"#);
+    let body = format!(r#"{{"token":"{token}","command":"start"}}"#);
     let response = app
         .oneshot(
             Request::builder()
@@ -110,6 +187,106 @@ async fn command_accepts_correct_pin() {
 }
 
 #[tokio::test]
+async fn raw_pin_cannot_authorize_commands() {
+    let (state, root, pin) = test_state("raw-pin");
+    let app = build_router(state);
+    let body = format!(r#"{{"token":"{pin}","command":"start"}}"#);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/command")
+                .header("Content-Type", "application/json")
+                .extension(axum::extract::ConnectInfo(addr()))
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[tokio::test]
+async fn revoked_session_cannot_read_status() {
+    let (state, root, pin) = test_state("revoked-session");
+    let app = build_router(state.clone());
+    let token = pair_session(app.clone(), &pin).await;
+    let session_id = state.lock().unwrap().remote_sessions()[0].id;
+    assert!(state.lock().unwrap().revoke_remote_session(session_id));
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/status")
+                .header("Authorization", format!("Bearer {token}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[tokio::test]
+async fn device_can_log_out_its_own_session() {
+    let (state, root, pin) = test_state("session-logout");
+    let app = build_router(state);
+    let token = pair_session(app.clone(), &pin).await;
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/auth/logout")
+                .header("Content-Type", "application/json")
+                .extension(axum::extract::ConnectInfo(addr()))
+                .body(Body::from(format!(r#"{{"token":"{token}"}}"#)))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/status")
+                .header("Authorization", format!("Bearer {token}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[tokio::test]
+async fn rotating_pin_revokes_all_existing_sessions() {
+    let (state, root, pin) = test_state("pin-rotation");
+    let app = build_router(state.clone());
+    let token = pair_session(app.clone(), &pin).await;
+    state.lock().unwrap().rotate_pin().unwrap();
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/status")
+                .header("Authorization", format!("Bearer {token}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[tokio::test]
 async fn rate_limit_locks_after_five_failures() {
     let (state, root, _pin) = test_state("rate-limit");
     let app = build_router(state.clone());
@@ -121,10 +298,10 @@ async fn rate_limit_locks_after_five_failures() {
             .oneshot(
                 Request::builder()
                     .method("POST")
-                    .uri("/command")
+                    .uri("/auth/pair")
                     .header("Content-Type", "application/json")
                     .extension(axum::extract::ConnectInfo(addr()))
-                    .body(Body::from(r#"{"token":"00000000","command":"start"}"#))
+                    .body(Body::from(r#"{"pin":"00000000"}"#))
                     .unwrap(),
             )
             .await
@@ -137,13 +314,10 @@ async fn rate_limit_locks_after_five_failures() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/command")
+                .uri("/auth/pair")
                 .header("Content-Type", "application/json")
                 .extension(axum::extract::ConnectInfo(addr()))
-                .body(Body::from(format!(
-                    r#"{{"token":"{}","command":"start"}}"#,
-                    state.lock().unwrap().pin
-                )))
+                .body(Body::from(format!(r#"{{"pin":"{}"}}"#, state.lock().unwrap().pin)))
                 .unwrap(),
         )
         .await
@@ -157,8 +331,9 @@ async fn rate_limit_locks_after_five_failures() {
 async fn add_note_returns_new_id() {
     let (state, root, pin) = test_state("add-note");
     let app = build_router(state);
+    let token = pair_session(app.clone(), &pin).await;
 
-    let body = format!(r#"{{"token":"{pin}","accomplishment":"Wrote tests","subject":"Rust"}}"#);
+    let body = format!(r#"{{"token":"{token}","accomplishment":"Wrote tests","subject":"Rust"}}"#);
     let response = app
         .oneshot(
             Request::builder()
@@ -185,9 +360,10 @@ async fn add_note_returns_new_id() {
 async fn update_note_with_unknown_id_returns_400() {
     let (state, root, pin) = test_state("update-unknown");
     let app = build_router(state);
+    let token = pair_session(app.clone(), &pin).await;
 
     let body =
-        format!(r#"{{"token":"{pin}","id":"nonexistent","accomplishment":"x","subject":""}}"#);
+        format!(r#"{{"token":"{token}","id":"nonexistent","accomplishment":"x","subject":""}}"#);
     let response = app
         .oneshot(
             Request::builder()
@@ -210,9 +386,10 @@ async fn update_note_with_unknown_id_returns_400() {
 async fn delete_note_is_idempotent() {
     let (state, root, pin) = test_state("delete-idem");
     let app = build_router(state);
+    let token = pair_session(app.clone(), &pin).await;
 
     // Create a note.
-    let body = format!(r#"{{"token":"{pin}","accomplishment":"to delete","subject":""}}"#);
+    let body = format!(r#"{{"token":"{token}","accomplishment":"to delete","subject":""}}"#);
     let response = app
         .clone()
         .oneshot(
@@ -230,7 +407,7 @@ async fn delete_note_is_idempotent() {
     let id = json["id"].as_str().unwrap().to_owned();
 
     // Delete it.
-    let body = format!(r#"{{"token":"{pin}","id":"{id}"}}"#);
+    let body = format!(r#"{{"token":"{token}","id":"{id}"}}"#);
     let response = app
         .clone()
         .oneshot(

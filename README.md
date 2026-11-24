@@ -20,14 +20,16 @@ you choose a focus length and optional daily goal.
 
 The desktop app displays its local URL, a QR code, and a randomly generated
 eight-digit PIN. Scan the QR code on a phone connected to the same Wi-Fi to
-open the remote and sign in automatically; the QR code carries the PIN in its
-URL fragment. Treat it like the PIN and share it only with trusted devices.
-You can also open a copied URL and enter the PIN manually. The phone page can
+pair automatically; the QR code contains a one-time code that expires after
+two minutes. You can also open a copied URL and enter the PIN manually. Paired
+sessions expire after eight hours, can be revoked individually from the PC,
+and are all revoked when the PIN changes or Kronari closes. The phone page can
 start, pause, reset, or skip the timer and update all timer lengths.
 The remote uses the port shown in the desktop app; allow it through Windows
 Firewall for private networks if prompted. The PIN is generated from
 the operating system's secure random source, and five incorrect attempts
-temporarily lock PIN-protected actions.
+temporarily lock PIN pairing. Remote traffic is unencrypted HTTP, so only use
+the phone remote on a trusted network.
 
 ## Flexible focus rhythm
 

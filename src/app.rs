@@ -1253,20 +1253,71 @@ impl PomodoroApp {
 
                 if !state.local_url.is_empty() {
                     ui.add_space(8.0);
-                    ui.horizontal(|ui| {
-                        let qr_url = format!("{}#pin={}", state.local_url, state.pin);
-                        show_qr_code(ui, &qr_url, &mut self.qr_cache);
-                        ui.vertical(|ui| {
-                            ui.label("Scan to open and sign in to the phone remote.");
+                    match state.pairing_code() {
+                        Ok((pairing_token, expires_in)) => {
+                            ui.horizontal(|ui| {
+                                let qr_url = format!("{}#pair={pairing_token}", state.local_url);
+                                show_qr_code(ui, &qr_url, &mut self.qr_cache);
+                                ui.vertical(|ui| {
+                                    ui.label("Scan to pair this device.");
+                                    ui.label(
+                                        egui::RichText::new(format!(
+                                            "QR refreshes in {}s. Sessions expire after 8 hours.",
+                                            expires_in.as_secs()
+                                        ))
+                                        .size(12.0)
+                                        .color(theme::MUTED),
+                                    );
+                                    ui.label(
+                                        egui::RichText::new(
+                                            "Remote traffic is unencrypted; use trusted Wi-Fi.",
+                                        )
+                                        .size(12.0)
+                                        .color(WARN_AMBER),
+                                    );
+                                });
+                            });
+                        }
+                        Err(error) => {
+                            ui.label(egui::RichText::new(error).size(12.0).color(ERR_ROSE));
+                        }
+                    }
+                }
+
+                ui.add_space(12.0);
+                ui.label(
+                    egui::RichText::new("PAIRED DEVICES").size(10.5).strong().color(theme::MUTED),
+                );
+                let sessions = state.remote_sessions();
+                if sessions.is_empty() {
+                    ui.label(
+                        egui::RichText::new("No active sessions").size(12.0).color(theme::MUTED),
+                    );
+                } else {
+                    for session in sessions {
+                        ui.horizontal_wrapped(|ui| {
+                            let minutes = session.expires_in.as_secs().div_ceil(60);
                             ui.label(
-                                egui::RichText::new(
-                                    "The QR includes your remote PIN; share it only with trusted devices.",
-                                )
+                                egui::RichText::new(format!(
+                                    "Device {} · {} · {}h {}m left",
+                                    session.id,
+                                    session.ip,
+                                    minutes / 60,
+                                    minutes % 60
+                                ))
                                 .size(12.0)
-                                .color(theme::MUTED),
+                                .color(theme::TEXT),
                             );
+                            if ui.small_button("Revoke").clicked() {
+                                state.revoke_remote_session(session.id);
+                                self.set_toast(format!("Device {} revoked", session.id));
+                            }
                         });
-                    });
+                    }
+                    if ui.button("Revoke all devices").clicked() {
+                        let count = state.revoke_all_remote_sessions();
+                        self.set_toast(format!("Revoked {count} device session(s)"));
+                    }
                 }
 
                 ui.add_space(8.0);
