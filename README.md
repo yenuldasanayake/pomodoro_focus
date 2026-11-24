@@ -1,4 +1,4 @@
-# Kronari
+# this project moved to new repository with more feautures + release build.please check it out check it out Kronari
 
 Kronari is a fullscreen Pomodoro timer for Windows, built with Rust, eframe,
 and egui. It tracks daily study time, records session notes, and provides a
