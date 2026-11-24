@@ -266,7 +266,7 @@ impl AppState {
                     Mode::Study => "Focus session complete. Time for a break.",
                     Mode::ShortBreak | Mode::LongBreak => "Break complete. Time to focus.",
                 };
-                system::notify("Pomodoro Focus", message);
+                system::notify("Kronari", message);
             }
             if mode == Mode::Study {
                 self.pending_note_duration = Some(u64::from(self.settings.study_minutes) * 60);

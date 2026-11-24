@@ -1,10 +1,12 @@
+#![cfg_attr(target_os = "windows", windows_subsystem = "windows")]
+
 use pomodoro_focus::{app, storage::Storage};
 
 fn main() -> eframe::Result {
     let storage = Storage::new(".");
     let settings = storage.load_settings().unwrap_or_default();
     eframe::run_native(
-        "Pomodoro Focus",
+        "Kronari",
         app::native_options(&settings),
         Box::new(|creation_context| {
             let app = app::create_app(creation_context).map_err(|error| {

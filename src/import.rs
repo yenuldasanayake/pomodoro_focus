@@ -46,7 +46,7 @@ pub fn parse(bytes: &[u8]) -> Result<Bundle, String> {
     }
     if bundle.version > crate::export::EXPORT_VERSION {
         return Err(format!(
-            "File version {} is newer than this app supports ({}). Update Pomodoro Focus.",
+            "File version {} is newer than this app supports ({}). Update Kronari.",
             bundle.version,
             crate::export::EXPORT_VERSION,
         ));

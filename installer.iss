@@ -1,9 +1,9 @@
-; Pomodoro Focus — Inno Setup script
+; Kronari — Inno Setup script
 ; Build with: "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" installer.iss
 
-#define MyAppName "Pomodoro Focus"
+#define MyAppName "Kronari"
 #define MyAppVersion "1.0.1"
-#define MyAppPublisher "Yenul"
+#define MyAppPublisher "Yenul Dasanayake"
 #define MyAppExeName "pomodoro_focus.exe"
 #define MyAppId "{{A1B2C3D4-E5F6-7890-ABCD-EF1234567890}"
 
@@ -28,7 +28,7 @@ UninstallDisplayIcon={app}\{#MyAppExeName}
 
 ; Output
 OutputDir=Output
-OutputBaseFilename=PomodoroFocus-Setup-{#MyAppVersion}
+OutputBaseFilename=Kronari-Setup-{#MyAppVersion}
 Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
@@ -46,7 +46,7 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
-Name: "startupicon"; Description: "Start Pomodoro Focus when I log in"; GroupDescription: "Startup:"; Flags: unchecked
+Name: "startupicon"; Description: "Start Kronari when I log in"; GroupDescription: "Startup:"; Flags: unchecked
 
 [Files]
 Source: "target\release\{#MyAppExeName}"; DestDir: "{app}"; Flags: ignoreversion
@@ -55,7 +55,7 @@ Source: "icon.png"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
 ; Start Menu shortcut — WorkingDir must point to {app} so settings.json and data\ land there
-Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; WorkingDir: "{app}"; IconFilename: "{app}\{#MyAppExeName}"; Comment: "Pomodoro Focus"
+Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; WorkingDir: "{app}"; IconFilename: "{app}\{#MyAppExeName}"; Comment: "Kronari"
 Name: "{group}\Uninstall {#MyAppName}"; Filename: "{uninstallexe}"
 
 ; Desktop shortcut (optional, from Tasks)

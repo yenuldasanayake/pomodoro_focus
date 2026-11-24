@@ -157,9 +157,9 @@ impl eframe::App for PomodoroApp {
                 let minutes = state.timer.remaining_seconds / 60;
                 let seconds = state.timer.remaining_seconds % 60;
                 let status = if state.timer.running { "Running" } else { "Paused" };
-                format!("Pomodoro Focus — {status} · {minutes:02}:{seconds:02}")
+                format!("Kronari — {status} · {minutes:02}:{seconds:02}")
             } else {
-                "Pomodoro Focus".to_owned()
+                "Kronari".to_owned()
             };
             tray.set_tooltip(&tooltip_state);
             for event in tray.poll() {
@@ -246,7 +246,7 @@ impl eframe::App for PomodoroApp {
                 Mode::ShortBreak => "SHORT BREAK",
                 Mode::LongBreak => "LONG BREAK",
             };
-            let title = format!("Pomodoro Focus — {minutes:02}:{seconds:02} · {label}");
+            let title = format!("Kronari — {minutes:02}:{seconds:02} · {label}");
             ctx.send_viewport_cmd(egui::ViewportCommand::Title(title));
         }
 
@@ -626,6 +626,14 @@ impl PomodoroApp {
                     egui::CollapsingHeader::new(format!("Notes · {}", state.notes.entries.len()))
                         .default_open(false)
                         .show(ui, |ui| self.show_notes_section(ui, state));
+                    ui.add_space(8.0);
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        ui.label(
+                            egui::RichText::new("Created by Yenul Dasanayake")
+                                .size(10.5)
+                                .color(theme::MUTED),
+                        );
+                    });
                 });
             });
     }
@@ -633,7 +641,7 @@ impl PomodoroApp {
     fn show_top(&mut self, ui: &mut egui::Ui, state: &mut AppState) {
         ui.horizontal(|ui| {
             ui.add_space(4.0);
-            ui.label(egui::RichText::new("POMODORO FOCUS").size(15.0).strong().color(theme::TEXT));
+            ui.label(egui::RichText::new("KRONARI").size(15.0).strong().color(theme::TEXT));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if ui
                     .add(
@@ -1246,13 +1254,13 @@ impl PomodoroApp {
                 if !state.local_url.is_empty() {
                     ui.add_space(8.0);
                     ui.horizontal(|ui| {
-                        show_qr_code(ui, &state.local_url, &mut self.qr_cache);
+                        let qr_url = format!("{}#pin={}", state.local_url, state.pin);
+                        show_qr_code(ui, &qr_url, &mut self.qr_cache);
                         ui.vertical(|ui| {
-                            ui.label("Scan to open the phone remote on this Wi-Fi.");
-                            ui.label("Then enter the PIN shown above.");
+                            ui.label("Scan to open and sign in to the phone remote.");
                             ui.label(
                                 egui::RichText::new(
-                                    "The QR code contains only the local address, not your PIN.",
+                                    "The QR includes your remote PIN; share it only with trusted devices.",
                                 )
                                 .size(12.0)
                                 .color(theme::MUTED),
@@ -1427,10 +1435,7 @@ impl PomodoroApp {
                     changed = true;
                 }
                 if ui
-                    .checkbox(
-                        &mut settings.launch_at_startup,
-                        "Launch Pomodoro Focus when Windows starts",
-                    )
+                    .checkbox(&mut settings.launch_at_startup, "Launch Kronari when Windows starts")
                     .changed()
                 {
                     changed = true;
@@ -1724,7 +1729,7 @@ impl PomodoroApp {
 
         let mut start_focus = false;
         let mut save_for_later = false;
-        egui::Window::new("Welcome to Pomodoro Focus")
+        egui::Window::new("Welcome to Kronari")
             .id(Id::new("first-run-setup"))
             .collapsible(false)
             .resizable(false)
@@ -2242,7 +2247,7 @@ pub fn native_options(settings: &crate::storage::Settings) -> eframe::NativeOpti
     let mut viewport = egui::ViewportBuilder::default()
         .with_inner_size([900.0, 700.0])
         .with_min_inner_size([380.0, 520.0])
-        .with_title("Pomodoro Focus")
+        .with_title("Kronari")
         .with_visible(!settings.start_minimized);
     if let Some(icon) = icon {
         viewport = viewport.with_icon(icon);

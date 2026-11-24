@@ -1,8 +1,8 @@
-# Pomodoro Focus
+# Kronari
 
-A fullscreen Pomodoro timer for Windows, built with Rust, eframe, and egui. It
-tracks daily study time, records session notes, and provides a PIN-protected
-phone remote on your local network.
+Kronari is a fullscreen Pomodoro timer for Windows, built with Rust, eframe,
+and egui. It tracks daily study time, records session notes, and provides a
+PIN-protected phone remote on your local network.
 
 ## Build and run
 
@@ -19,8 +19,10 @@ you choose a focus length and optional daily goal.
 ## Phone remote
 
 The desktop app displays its local URL, a QR code, and a randomly generated
-eight-digit PIN. Scan the QR code on a phone connected to the same Wi-Fi, then
-enter the PIN. The QR code contains only the local URL. The phone page can
+eight-digit PIN. Scan the QR code on a phone connected to the same Wi-Fi to
+open the remote and sign in automatically; the QR code carries the PIN in its
+URL fragment. Treat it like the PIN and share it only with trusted devices.
+You can also open a copied URL and enter the PIN manually. The phone page can
 start, pause, reset, or skip the timer and update all timer lengths.
 The remote uses the port shown in the desktop app; allow it through Windows
 Firewall for private networks if prompted. The PIN is generated from
@@ -51,3 +53,7 @@ compact window can be expanded from its **Expand** button.
 
 These files are created in the current working directory. Existing history,
 notes, reflections, and timer progress are retained across launches.
+
+## Credits
+
+Created by Yenul Dasanayake.

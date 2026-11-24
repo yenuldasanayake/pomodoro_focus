@@ -1,6 +1,6 @@
 {
-  "name": "Pomodoro Focus",
-  "short_name": "Pomodoro",
+  "name": "Kronari",
+  "short_name": "Kronari",
   "description": "Control your focus timer from your phone.",
   "start_url": "/",
   "scope": "/",

@@ -4,15 +4,18 @@ use std::io;
 use std::process::Command;
 
 const STARTUP_REG_KEY: &str = r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run";
-const STARTUP_VALUE_NAME: &str = "Pomodoro Focus";
+const STARTUP_VALUE_NAME: &str = "Kronari";
+const LEGACY_STARTUP_VALUE_NAME: &str = "Pomodoro Focus";
 
 pub fn startup_enabled() -> bool {
     #[cfg(windows)]
     {
-        Command::new("reg")
-            .args(["query", STARTUP_REG_KEY, "/v", STARTUP_VALUE_NAME])
-            .output()
-            .is_ok_and(|output| output.status.success())
+        [STARTUP_VALUE_NAME, LEGACY_STARTUP_VALUE_NAME].into_iter().any(|name| {
+            Command::new("reg")
+                .args(["query", STARTUP_REG_KEY, "/v", name])
+                .output()
+                .is_ok_and(|output| output.status.success())
+        })
     }
 
     #[cfg(not(windows))]
@@ -37,18 +40,11 @@ pub fn set_startup_enabled(enabled: bool) -> io::Result<()> {
                 "/d",
                 &command,
                 "/f",
-            ]))
+            ]))?;
+            delete_startup_value(LEGACY_STARTUP_VALUE_NAME)
         } else {
-            let output = Command::new("reg")
-                .args(["delete", STARTUP_REG_KEY, "/v", STARTUP_VALUE_NAME, "/f"])
-                .output()?;
-            if output.status.success()
-                || String::from_utf8_lossy(&output.stderr).contains("unable to find")
-            {
-                Ok(())
-            } else {
-                Err(io::Error::other(String::from_utf8_lossy(&output.stderr).trim().to_owned()))
-            }
+            delete_startup_value(STARTUP_VALUE_NAME)?;
+            delete_startup_value(LEGACY_STARTUP_VALUE_NAME)
         }
     }
 
@@ -59,6 +55,18 @@ pub fn set_startup_enabled(enabled: bool) -> io::Result<()> {
             io::ErrorKind::Unsupported,
             "Launch at startup is only supported on Windows",
         ))
+    }
+}
+
+#[cfg(windows)]
+fn delete_startup_value(name: &str) -> io::Result<()> {
+    let output =
+        Command::new("reg").args(["delete", STARTUP_REG_KEY, "/v", name, "/f"]).output()?;
+    if output.status.success() || String::from_utf8_lossy(&output.stderr).contains("unable to find")
+    {
+        Ok(())
+    } else {
+        Err(io::Error::other(String::from_utf8_lossy(&output.stderr).trim().to_owned()))
     }
 }
 

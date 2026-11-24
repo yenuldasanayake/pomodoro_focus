@@ -49,7 +49,7 @@ impl TrayHandle {
 
             let tray = TrayIconBuilder::new()
                 .with_menu(Box::new(menu))
-                .with_tooltip("Pomodoro Focus")
+                .with_tooltip("Kronari")
                 .with_icon(icon)
                 .build()
                 .map_err(|e| std::io::Error::other(e.to_string()))?;
@@ -109,8 +109,7 @@ impl TrayHandle {
 
 #[cfg(windows)]
 fn build_icon() -> tray_icon::Icon {
-    // Same PNG as the window icon. Include from the project root.
-    let bytes = include_bytes!("../icon.png");
+    let bytes = include_bytes!("../tray.png");
     match eframe::icon_data::from_png_bytes(bytes) {
         Ok(data) => {
             tray_icon::Icon::from_rgba(data.rgba, data.width, data.height).unwrap_or_else(|error| {

@@ -7,7 +7,7 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <link rel="manifest" href="/manifest.json">
-<title>Pomodoro Focus</title>
+<title>Kronari</title>
 <style>
 :root{
   color-scheme:dark;
@@ -71,6 +71,7 @@ input:focus{outline:none;border-color:var(--accent)}
 .note .when{color:var(--muted);font-size:.72rem;font-variant-numeric:tabular-nums}
 .note .body{font-size:.9rem;line-height:1.4;word-break:break-word}
 .note .footer{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-top:2px}
+.credit{text-align:center;color:var(--muted);font-size:.75rem;margin-top:22px}
 .note .dur{color:var(--muted);font-size:.72rem}
 .note .actions{display:flex;gap:6px}
 .note .icon-btn{background:transparent;border:1px solid var(--border);color:var(--muted);border-radius:10px;padding:5px 9px;font-size:.72rem;font-weight:600;cursor:pointer;font-family:inherit}
@@ -107,7 +108,7 @@ body.flash::before{content:"";position:fixed;inset:0;background:var(--accent);op
 </head>
 <body>
 <main>
-  <div class="eyebrow">Pomodoro Focus</div>
+  <div class="eyebrow">Kronari</div>
   <h1>Your focus, in sync.</h1>
 
   <section class="card timer">
@@ -250,6 +251,7 @@ body.flash::before{content:"";position:fixed;inset:0;background:var(--accent);op
     <p id="power-banner-text" class="today" style="margin-top:6px"></p>
     <button class="button danger wide" style="margin-top:10px" onclick="cancelPower()">Cancel</button>
   </div>
+  <footer class="credit">Created by Yenul Dasanayake</footer>
 </main>
 
 <div class="note-toast" id="note-toast"></div>
@@ -276,6 +278,15 @@ let lastNotes=[];
 function pin(){return $("pin").value.trim()}
 function forgetPin(){localStorage.removeItem(PIN_KEY);$("pin").value="";toast("PIN forgotten")}
 (function hydratePin(){const s=localStorage.getItem(PIN_KEY);if(s)$("pin").value=s})();
+(function hydrateQrPin(){
+  const qrPin=new URLSearchParams(location.hash.slice(1)).get("pin");
+  if(qrPin===null)return;
+  if(/^\d{8}$/.test(qrPin)){
+    $("pin").value=qrPin;
+    localStorage.setItem(PIN_KEY,qrPin);
+  }
+  history.replaceState(null,"",location.pathname+location.search);
+})();
 
 function toast(text,kind){
   const el=document.createElement("div");

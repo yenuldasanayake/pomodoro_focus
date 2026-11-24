@@ -13,4 +13,4 @@ if (-not (Test-Path $iscc)) {
 & $iscc "$root\installer.iss"
 
 Write-Host "Done." -ForegroundColor Green
-Write-Host "Installer: $root\Output\PomodoroFocus-Setup-1.0.0.exe"
+Write-Host "Installer: $root\Output\Kronari-Setup-1.0.1.exe"
